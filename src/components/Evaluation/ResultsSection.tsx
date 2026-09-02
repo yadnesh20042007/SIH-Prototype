@@ -8,6 +8,7 @@ import type { RepeatabilityTestResult } from '@/lib/r76/calculations/repeatabili
 import type { EccentricityTestResult } from '@/lib/r76/calculations/eccentricity';
 import { ComplianceIcon } from '@/components/ui/ComplianceIcon';
 import { StatusBadge } from '@/components/ui/StatusBadge';
+import { ComplianceTracePanel } from './ComplianceTracePanel';
 
 interface ResultsSectionProps { result: OrchestrationResult | null; error: string | null; loading: boolean; }
 
@@ -157,6 +158,7 @@ function WeighingResultDetail({ result }: { result: WeighingPerformanceTestResul
             <Comparison leftLabel="Calculated Error" leftValue={`${observation.calculatedError} kg`} rightLabel="Permissible MPE" rightValue={`±${observation.mpe} kg`} />
             <div className="mt-3 grid grid-cols-2 gap-3"><Metric label="Indication before rounding (P)" value={`${observation.indicationPriorToRounding} kg`} /><Metric label="Error before correction (E)" value={`${observation.errorPriorToRounding} kg`} /></div>
             <Explanation value={observation.explanation} /><Reference value={observation.r76Reference} />
+            {observation.trace && <ComplianceTracePanel traces={observation.trace} />}
           </div>
         </div>
       ))}
@@ -170,6 +172,7 @@ function RepeatabilityResultDetail({ result }: { result: RepeatabilityTestResult
       <Comparison leftLabel="Observed Range" leftValue={`${result.repeatabilityRange} kg`} rightLabel="Permissible MPE" rightValue={`±${result.mpe} kg`} />
       <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3"><Metric label="Test Load" value={`${result.testLoad} kg`} /><Metric label="Weighings" value={String(result.numberOfWeighings)} /><Metric label="Imax / Imin" value={`${result.iMax} / ${result.iMin} kg`} /></div>
       <Explanation value={result.explanation} /><Reference value={result.r76Reference} />
+      {result.trace && <ComplianceTracePanel traces={result.trace} />}
     </div>
   );
 }
@@ -185,6 +188,7 @@ function EccentricityResultDetail({ result }: { result: EccentricityTestResult }
             <Comparison leftLabel="Calculated Error" leftValue={`${position.calculatedError} kg`} rightLabel="Permissible MPE" rightValue={`±${position.mpe} kg`} />
             <div className="mt-3 grid grid-cols-2 gap-3"><Metric label="Applied Load (L)" value={`${position.appliedLoad} kg`} /><Metric label="Indicated Value (I)" value={`${position.indicatedValue} kg`} /></div>
             <Explanation value={position.explanation} /><Reference value={position.r76Reference} />
+            {position.trace && <ComplianceTracePanel traces={position.trace} />}
           </div>
         </div>
       ))}

@@ -121,3 +121,121 @@ export interface TestComplianceResult {
    */
   explanation: string;
 }
+
+// ─── Compliance Trace types ───────────────────────────────────────
+
+/**
+ * A pinned reference to a specific OIML R 76-1:2006 (E) clause, table,
+ * or annex that was actually used by the engine rule producing this trace.
+ *
+ * Only references confirmed in the backend implementation are populated.
+ * AI-inferred or speculative references are never added.
+ */
+export interface R76DocumentReference {
+  /** Canonical document identifier. */
+  document: 'OIML R 76-1:2006 (E)';
+  /** Clause number, e.g. "3.5.1" or "3.6.2". Optional when not a clause ref. */
+  clause?: string;
+  /** Table identifier, e.g. "Table 6". */
+  table?: string;
+  /** Annex identifier, e.g. "Annex A.4.4.3" or "Annex A.4.7.1". */
+  annex?: string;
+  /** Short human-readable description of what this reference covers. */
+  purpose: string;
+}
+
+/**
+ * One step in the formula chain shown in the Compliance Trace.
+ * Separates the abstract formula from its substituted form and result.
+ */
+export interface TraceCalculationStep {
+  /** Display label for this step, e.g. "Indication before rounding (P)". */
+  label: string;
+  /** Abstract formula, e.g. "P = I + 0.5e − ΔL". */
+  formula: string;
+  /** Formula with actual numeric values substituted, e.g. "P = 5.000 + 0.5(0.010) − 0.004". */
+  substitutedFormula: string;
+  /** Numeric result of this step. */
+  result: number;
+  /** Physical unit of the result, e.g. "kg". */
+  unit: string;
+  /** Optional R76 reference specifically for this step (e.g. the annex that defines the formula). */
+  reference?: R76DocumentReference;
+}
+
+/**
+ * Structured breakdown of how the Maximum Permissible Error (MPE) was
+ * selected from OIML R 76-1:2006 (E) Table 6 for a particular observation.
+ *
+ * All numerical values are in kg.
+ */
+export interface MPETraceDetail {
+  /** Accuracy class of the instrument. */
+  accuracyClass: string;
+  /** Load used for MPE band selection, in kg. */
+  load: number;
+  /** Verification scale interval e, in kg. */
+  e: number;
+  /** Ratio load / e (dimensionless). */
+  loadOverE: number;
+  /** Human-readable description of the applicable Table 6 band, e.g. "500e < m ≤ 2000e". */
+  tableBand: string;
+  /** MPE factor expressed as a multiple of e, e.g. "1.0e". */
+  mpeFactor: string;
+  /** Base MPE = mpe_factor × e, in kg. */
+  baseMPE: number;
+  /** Verification context label, e.g. "Initial Verification". */
+  verificationContext: string;
+  /** Multiplier applied for the verification context (1 or 2). */
+  contextMultiplier: number;
+  /** Effective MPE = baseMPE × contextMultiplier, in kg. */
+  effectiveMPE: number;
+  /** R76 reference for the MPE table. */
+  reference: R76DocumentReference;
+}
+
+/**
+ * Complete, structured Compliance Trace for a single observation or test.
+ *
+ * Produced exclusively by the backend R76 calculation functions.
+ * The frontend renders this data verbatim — no compliance logic is performed
+ * in React components.
+ */
+export interface ComplianceTrace {
+  /**
+   * Instrument / evaluation context values relevant to this specific test.
+   * Key-value pairs only — no derived or calculated values here.
+   */
+  instrumentContext: Record<string, string | number | boolean>;
+
+  /** R76 references actually used by the engine rule for this observation. */
+  references: R76DocumentReference[];
+
+  /**
+   * Raw observed inputs recorded by the inspector.
+   * Key-value pairs matching the observation variables (L, I, ΔL, E0, etc.).
+   */
+  inputs: Record<string, string | number>;
+
+  /** Ordered formula steps showing the full calculation chain. */
+  calculationSteps: TraceCalculationStep[];
+
+  /** How the applicable MPE was determined from Table 6. */
+  mpeTrace: MPETraceDetail;
+
+  /**
+   * Final comparison statement, e.g. "|Ec| ≤ MPE" or "R ≤ MPE".
+   * Presented as: comparisonFormula, leftValue OP rightValue.
+   */
+  comparison: {
+    /** Abstract comparison formula, e.g. "|Ec| ≤ MPE". */
+    formula: string;
+    /** Substituted comparison, e.g. "|0.002 kg| ≤ 0.005 kg". */
+    substituted: string;
+    /** Whether the comparison passed (left ≤ right). */
+    passed: boolean;
+  };
+
+  /** Regulatory outcome for this observation or test. */
+  outcome: TestOutcome;
+}

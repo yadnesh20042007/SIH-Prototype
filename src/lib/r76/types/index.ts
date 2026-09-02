@@ -30,6 +30,10 @@ export type { EccentricLoadingObservation }         from './observations';
 export { TestStatus, TestOutcome }                  from './results';
 export type { ObservationComplianceResult }         from './results';
 export type { TestComplianceResult }                from './results';
+export type { R76DocumentReference }                from './results';
+export type { TraceCalculationStep }                from './results';
+export type { MPETraceDetail }                      from './results';
+export type { ComplianceTrace }                     from './results';
 
 // ── Test sessions ──────────────────────────────────────────────────
 export      { TestType }                            from './test';

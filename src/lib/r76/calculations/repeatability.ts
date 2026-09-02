@@ -1,5 +1,6 @@
 import { RepeatabilityObservation } from '../types/observations';
 import { TestComplianceResult, TestOutcome } from '../types/results';
+import type { ComplianceTrace } from '../types/results';
 import { calculateMPE } from './mpe';
 import { Instrument, AccuracyClass } from '../types/instrument';
 import { VerificationContext } from '../types/verification';
@@ -10,6 +11,8 @@ export interface RepeatabilityTestResult extends TestComplianceResult {
   iMax: number;
   iMin: number;
   mpe: number;
+  /** Structured Compliance Trace for the repeatability test. */
+  trace: ComplianceTrace;
 }
 
 /**
@@ -58,6 +61,82 @@ export function evaluateRepeatabilityTest(
   const isPass = (R - mpe) <= 1e-9;
   const outcome = isPass ? TestOutcome.Pass : TestOutcome.Fail;
 
+  // ── Build Compliance Trace ──────────────────────────────────────
+  const indicationsList = obs.indications.map((v, i) => `I${i + 1} = ${v} kg`).join(', ');
+
+  const trace: ComplianceTrace = {
+    instrumentContext: {
+      'Accuracy Class': instrument.accuracyClass,
+      'Max (kg)': instrument.max,
+      'Min (kg)': instrument.min,
+      'e (kg)': instrument.e,
+      'd (kg)': instrument.d,
+      'Verification Context': mpeResult.mpeTrace.verificationContext,
+      'Required weighings': requiredWeighings,
+      'Auto-zero / tracking active': obs.autoZeroOrTrackingActive,
+    },
+    references: [
+      {
+        document: 'OIML R 76-1:2006 (E)',
+        clause: '3.6.1',
+        purpose: 'Repeatability — maximum permissible variation of indication',
+      },
+      {
+        document: 'OIML R 76-1:2006 (E)',
+        annex: 'Annex A.4.10',
+        purpose: 'Repeatability test procedure (3rd paragraph: R ≤ MPE criterion)',
+      },
+      {
+        document: 'OIML R 76-1:2006 (E)',
+        clause: '3.5.1',
+        table: 'Table 6',
+        purpose: 'Maximum permissible errors on verification (MPE reference for repeatability)',
+      },
+    ],
+    inputs: {
+      'Test load L (kg)': obs.testLoad,
+      'Number of weighings': obs.indications.length,
+      'Indications': indicationsList,
+      'Imax (kg)': iMax,
+      'Imin (kg)': iMin,
+    },
+    calculationSteps: [
+      {
+        label: 'Maximum indication (Imax)',
+        formula: 'Imax = max(I1, I2, …, In)',
+        substitutedFormula: `Imax = max(${obs.indications.join(', ')})`,
+        result: iMax,
+        unit: 'kg',
+      },
+      {
+        label: 'Minimum indication (Imin)',
+        formula: 'Imin = min(I1, I2, …, In)',
+        substitutedFormula: `Imin = min(${obs.indications.join(', ')})`,
+        result: iMin,
+        unit: 'kg',
+      },
+      {
+        label: 'Repeatability range (R)',
+        formula: 'R = Imax − Imin',
+        substitutedFormula: `R = ${iMax} − ${iMin}`,
+        result: R,
+        unit: 'kg',
+        reference: {
+          document: 'OIML R 76-1:2006 (E)',
+          annex: 'Annex A.4.10',
+          purpose: 'Repeatability spread calculation',
+        },
+      },
+    ],
+    mpeTrace: mpeResult.mpeTrace,
+    comparison: {
+      formula: 'R ≤ MPE',
+      substituted: `${R} kg ≤ ${mpe} kg`,
+      passed: isPass,
+    },
+    outcome,
+  };
+
   return {
     outcome,
     maxAbsoluteError: R, // In repeatability, the primary "error" is the spread R
@@ -69,6 +148,7 @@ export function evaluateRepeatabilityTest(
     iMax,
     iMin,
     mpe,
+    trace,
 
     r76Reference: 'R76-1 (2006) clause 3.6.1, A.4.10 (3rd paragraph)',
     explanation: `Test load: ${obs.testLoad} kg, Weighings: ${obs.indications.length}. Imax = ${iMax}, Imin = ${iMin}. R = ${R}. MPE is ±${mpe}. R ${isPass ? '≤' : '>'} MPE ➔ ${outcome.toUpperCase()}.`
