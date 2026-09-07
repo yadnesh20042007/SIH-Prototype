@@ -1,5 +1,3 @@
-import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
-import path from 'node:path';
 import type { Prisma, Report } from '@prisma/client';
 
 import { instrumentConfigFingerprint } from '@/lib/db/observation-fingerprint';
@@ -9,15 +7,13 @@ import {
   throwMappedDatabaseError,
 } from '@/lib/db/errors';
 import { prisma } from '@/lib/prisma';
-import {
-  publicVerificationUrl,
-  verificationUrlArtifactKey,
-} from '@/lib/reports/public-verification-url';
+import { publicVerificationUrl } from '@/lib/reports/public-verification-url';
 import {
   renderR76ReportPdf,
   type R76ReportData,
 } from '@/lib/reports/r76-report-pdf';
 import { assessResultFreshness } from '@/lib/services/result-freshness.service';
+import { logServerError } from '@/lib/server-error-log';
 
 const reportSessionInclude = {
   instrument: { include: { manufacturer: true } },
@@ -32,6 +28,10 @@ const reportSessionInclude = {
     orderBy: { createdAt: 'asc' as const },
   },
 } satisfies Prisma.TestSessionInclude;
+
+const reportPdfInclude = {
+  session: { include: reportSessionInclude },
+} satisfies Prisma.ReportInclude;
 
 type ReportSession = Prisma.TestSessionGetPayload<{ include: typeof reportSessionInclude }>;
 
@@ -63,7 +63,7 @@ function toReportRecord(report: Report): ReportRecord {
     issuedAt: report.issuedAt.toISOString(),
     updatedAt: report.updatedAt.toISOString(),
     revokedAt: report.revokedAt?.toISOString() ?? null,
-    pdfUrl: report.humanReadablePath ? `/api/reports/${encodeURIComponent(report.id)}/pdf` : null,
+    pdfUrl: report.revokedAt ? null : `/api/reports/${encodeURIComponent(report.id)}/pdf`,
     verificationUrl: publicVerificationUrl(report.qrVerificationId),
   };
 }
@@ -150,23 +150,6 @@ function reportData(report: Report, session: ReportSession, verificationUrl: str
   };
 }
 
-function reportRoot(): string {
-  return path.resolve(process.cwd(), 'output', 'pdf');
-}
-
-function resolveStoredPdf(relativePath: string): string {
-  const normalized = relativePath.replaceAll('\\', '/');
-  const filename = path.posix.basename(normalized);
-  if (normalized !== `output/pdf/${filename}` || !filename.endsWith('.pdf')) {
-    throw new DatabaseNotFoundError('Report PDF not found');
-  }
-  return path.join(reportRoot(), filename);
-}
-
-async function exists(filePath: string): Promise<boolean> {
-  try { return (await stat(filePath)).isFile(); } catch { return false; }
-}
-
 export async function generateApprovedSessionReport(testSessionId: string): Promise<ReportRecord> {
   try {
     const prepared = await prisma.$transaction(async tx => {
@@ -190,30 +173,10 @@ export async function generateApprovedSessionReport(testSessionId: string): Prom
       return { report, session };
     }, { isolationLevel: 'Serializable', timeout: 20000 });
 
-    const verificationUrl = publicVerificationUrl(prepared.report.qrVerificationId);
-    const artifactKey = verificationUrlArtifactKey(prepared.report.qrVerificationId);
-    const filename = `${prepared.report.referenceNumber}-v${prepared.report.version}-qr-${artifactKey}.pdf`;
-    const relativePath = path.join('output', 'pdf', filename).replaceAll('\\', '/');
-    if (prepared.report.humanReadablePath === relativePath) {
-      const existingPath = resolveStoredPdf(prepared.report.humanReadablePath);
-      if (await exists(existingPath)) return toReportRecord(prepared.report);
-    }
-
-    const bytes = await renderR76ReportPdf(reportData(prepared.report, prepared.session, verificationUrl));
-    await mkdir(reportRoot(), { recursive: true });
-    const absolutePath = path.join(reportRoot(), filename);
-    await writeFile(absolutePath, bytes);
-    const updated = await prisma.report.update({
-      where: { id: prepared.report.id },
-      data: { humanReadablePath: relativePath },
-    });
-    if (prepared.report.humanReadablePath && prepared.report.humanReadablePath !== relativePath) {
-      const replacedPath = resolveStoredPdf(prepared.report.humanReadablePath);
-      await unlink(replacedPath).catch(() => undefined);
-    }
-    return toReportRecord(updated);
+    return toReportRecord(prepared.report);
   } catch (error) {
     if (error instanceof ReportEligibilityError) throw error;
+    logServerError('[report.service] Approved report generation failed', error);
     throwMappedDatabaseError(error, 'Report');
   }
 }
@@ -231,12 +194,20 @@ export async function listReports(testSessionId?: string): Promise<ReportRecord[
 
 export async function readReportPdf(id: string): Promise<{ bytes: Uint8Array; filename: string }> {
   try {
-    const report = await prisma.report.findUnique({ where: { id } });
-    if (!report || report.revokedAt || !report.humanReadablePath) {
+    const report = await prisma.report.findUnique({
+      where: { id },
+      include: reportPdfInclude,
+    });
+    if (!report || report.revokedAt) {
       throw new DatabaseNotFoundError('Report PDF not found');
     }
-    const absolutePath = resolveStoredPdf(report.humanReadablePath);
-    const bytes = await readFile(absolutePath);
-    return { bytes: new Uint8Array(bytes), filename: `${report.referenceNumber}-v${report.version}-qr.pdf` };
-  } catch (error) { throwMappedDatabaseError(error, 'Report'); }
+    assertEligible(report.session);
+    const verificationUrl = publicVerificationUrl(report.qrVerificationId);
+    const bytes = await renderR76ReportPdf(reportData(report, report.session, verificationUrl));
+    return { bytes, filename: `${report.referenceNumber}-v${report.version}-qr.pdf` };
+  } catch (error) {
+    if (error instanceof ReportEligibilityError) throw error;
+    logServerError('[report.service] In-memory report rendering failed', error);
+    throwMappedDatabaseError(error, 'Report');
+  }
 }

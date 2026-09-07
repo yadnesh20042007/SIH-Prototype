@@ -26,10 +26,17 @@ describe('Report collection route unit tests', () => {
     expect((await POST(post({ testSessionId: 'session-1' }))).status).toBe(409);
   });
   it('maps missing sessions to 404 and unexpected errors safely', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     serviceMock.generateApprovedSessionReport.mockRejectedValueOnce(new DatabaseNotFoundError('TestSession not found'));
     expect((await POST(post({ testSessionId: 'missing' }))).status).toBe(404);
     serviceMock.generateApprovedSessionReport.mockRejectedValueOnce(new Error('private'));
-    expect(await (await POST(post({ testSessionId: 'session-1' }))).json()).toEqual({ error: 'Internal server error' });
+    const response = await POST(post({ testSessionId: 'session-1' }));
+    expect(await response.json()).toEqual({ error: 'Internal server error' });
+    expect(errorLog).toHaveBeenCalledWith(
+      '[api/reports] Unexpected generate failure',
+      expect.objectContaining({ name: 'Error', message: 'private', stack: expect.any(String) })
+    );
+    errorLog.mockRestore();
   });
   it('lists reports by trimmed session ID', async () => {
     serviceMock.listReports.mockResolvedValue([report]);

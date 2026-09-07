@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto';
-
 const LOCAL_DEVELOPMENT_APP_URL = 'http://localhost:3000';
 
 export function publicAppUrl(): string {
@@ -20,8 +18,4 @@ export function publicVerificationPath(qrVerificationId: string): string {
 
 export function publicVerificationUrl(qrVerificationId: string): string {
   return `${publicAppUrl()}${publicVerificationPath(qrVerificationId)}`;
-}
-
-export function verificationUrlArtifactKey(qrVerificationId: string): string {
-  return createHash('sha256').update(publicVerificationUrl(qrVerificationId)).digest('hex').slice(0, 12);
 }

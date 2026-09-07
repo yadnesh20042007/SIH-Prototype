@@ -4,7 +4,6 @@ import {
   publicAppUrl,
   publicVerificationPath,
   publicVerificationUrl,
-  verificationUrlArtifactKey,
 } from './public-verification-url';
 
 const originalAppUrl = process.env.NEXT_PUBLIC_APP_URL;
@@ -35,12 +34,5 @@ describe('Public verification URL', () => {
   it('rejects a configured URL that is not a clean HTTP origin', () => {
     process.env.NEXT_PUBLIC_APP_URL = 'https://example.test/application?source=bad';
     expect(() => publicVerificationUrl('public-qr-token')).toThrow(/must be an origin/);
-  });
-
-  it('changes the artifact key when the public application origin changes', () => {
-    process.env.NEXT_PUBLIC_APP_URL = 'https://first.example.test';
-    const first = verificationUrlArtifactKey('public-qr-token');
-    process.env.NEXT_PUBLIC_APP_URL = 'https://second.example.test';
-    expect(verificationUrlArtifactKey('public-qr-token')).not.toBe(first);
   });
 });

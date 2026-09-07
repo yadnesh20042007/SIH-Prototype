@@ -14,9 +14,8 @@ vi.mock('node:fs/promises', () => fsMock);
 
 import { instrumentConfigFingerprint } from '@/lib/db/observation-fingerprint';
 import { DatabaseNotFoundError } from '@/lib/db/errors';
-import { verificationUrlArtifactKey } from '@/lib/reports/public-verification-url';
 import { logicalObservationFingerprint } from './result-freshness.service';
-import { generateApprovedSessionReport, ReportEligibilityError } from './report.service';
+import { generateApprovedSessionReport, readReportPdf, ReportEligibilityError } from './report.service';
 
 const originalAppUrl = process.env.NEXT_PUBLIC_APP_URL;
 
@@ -80,25 +79,24 @@ describe('Report service unit tests (mocked Prisma and filesystem)', () => {
     testSessionMock.findUnique.mockResolvedValue(session());
     reportMock.findFirst.mockResolvedValue(null);
     reportMock.create.mockResolvedValue(report);
-    const artifactKey = verificationUrlArtifactKey(report.qrVerificationId);
-    reportMock.update.mockResolvedValue({ ...report, humanReadablePath: `output/pdf/NAWI-2026-ABC-v1-qr-${artifactKey}.pdf` });
     renderMock.mockResolvedValue(new Uint8Array([37, 80, 68, 70, 45]));
-    fsMock.stat.mockRejectedValue(new Error('missing'));
-    fsMock.unlink.mockResolvedValue(undefined);
+    reportMock.findUnique.mockResolvedValue({
+      ...report,
+      humanReadablePath: 'output/pdf/obsolete-local-report.pdf',
+      session: session(),
+    });
   });
 
-  it('loads all report content authoritatively and generates an approved report', async () => {
+  it('creates report metadata without rendering or writing a PDF', async () => {
     const result = await generateApprovedSessionReport('session-1');
     expect(result).toMatchObject({ id: 'report-1', pdfUrl: '/api/reports/report-1/pdf' });
     expect(testSessionMock.findUnique).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'session-1' },
       include: expect.objectContaining({ instrument: expect.anything(), observations: expect.anything(), results: expect.anything(), approvals: expect.anything() }),
     }));
-    expect(renderMock).toHaveBeenCalledWith(expect.objectContaining({
-      verificationUrl: 'https://sih-prototype-xi-eight.vercel.app/verify/qr-public-1',
-      session: expect.objectContaining({ instrument: expect.objectContaining({ model: 'Model A' }), results: expect.any(Array), approvals: expect.any(Array) }),
-    }));
-    expect(fsMock.writeFile).toHaveBeenCalledOnce();
+    expect(renderMock).not.toHaveBeenCalled();
+    expect(reportMock.update).not.toHaveBeenCalled();
+    expect(Object.values(fsMock).every(mock => mock.mock.calls.length === 0)).toBe(true);
   });
 
   it('rejects a non-approved session', async () => {
@@ -123,29 +121,81 @@ describe('Report service unit tests (mocked Prisma and filesystem)', () => {
     await expect(generateApprovedSessionReport('missing')).rejects.toBeInstanceOf(DatabaseNotFoundError);
   });
 
-  it('reuses an existing report and file without creating a duplicate', async () => {
-    const artifactKey = verificationUrlArtifactKey(report.qrVerificationId);
-    const existing = { ...report, humanReadablePath: `output/pdf/NAWI-2026-ABC-v1-qr-${artifactKey}.pdf` };
-    reportMock.findFirst.mockResolvedValue(existing);
-    fsMock.stat.mockResolvedValue({ isFile: () => true });
-    await expect(generateApprovedSessionReport('session-1')).resolves.toMatchObject({ id: 'report-1' });
-    expect(reportMock.create).not.toHaveBeenCalled();
-    expect(renderMock).not.toHaveBeenCalled();
-    expect(fsMock.writeFile).not.toHaveBeenCalled();
-  });
-
-  it('replaces an old-origin PDF without creating a new report or version', async () => {
-    const existing = { ...report, humanReadablePath: 'output/pdf/NAWI-2026-ABC-v1-qr.pdf' };
+  it('reuses an existing report record without creating a duplicate or changing its version', async () => {
+    const existing = { ...report, humanReadablePath: 'output/pdf/obsolete-local-report.pdf' };
     reportMock.findFirst.mockResolvedValue(existing);
     await expect(generateApprovedSessionReport('session-1')).resolves.toMatchObject({
-      id: 'report-1',
-      version: 1,
+      id: 'report-1', version: 1,
     });
     expect(reportMock.create).not.toHaveBeenCalled();
-    expect(reportMock.update).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 'report-1' },
+    expect(renderMock).not.toHaveBeenCalled();
+    expect(reportMock.update).not.toHaveBeenCalled();
+    expect(Object.values(fsMock).every(mock => mock.mock.calls.length === 0)).toBe(true);
+  });
+
+  it('renders an obsolete-path report entirely in memory from authoritative data', async () => {
+    const result = await readReportPdf('report-1');
+    expect(result).toEqual({
+      bytes: new Uint8Array([37, 80, 68, 70, 45]),
+      filename: 'NAWI-2026-ABC-v1-qr.pdf',
+    });
+    expect(reportMock.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'report-1' }, include: expect.anything(),
     }));
-    expect(fsMock.unlink).toHaveBeenCalledWith(expect.stringContaining('NAWI-2026-ABC-v1-qr.pdf'));
+    expect(renderMock).toHaveBeenCalledWith(expect.objectContaining({
+      verificationUrl: 'https://sih-prototype-xi-eight.vercel.app/verify/qr-public-1',
+      referenceNumber: 'NAWI-2026-ABC',
+      session: expect.objectContaining({
+        instrument: expect.objectContaining({ model: 'Model A' }),
+        results: expect.any(Array),
+        approvals: expect.any(Array),
+      }),
+    }));
+    expect(Object.values(fsMock).every(mock => mock.mock.calls.length === 0)).toBe(true);
+  });
+
+  it('repeatedly downloads from the same report identity without database mutation', async () => {
+    const first = await readReportPdf('report-1');
+    const second = await readReportPdf('report-1');
+    expect(first.filename).toBe(second.filename);
+    expect(reportMock.findUnique).toHaveBeenCalledTimes(2);
+    expect(renderMock).toHaveBeenCalledTimes(2);
+    expect(renderMock.mock.calls.map(call => call[0].verificationUrl)).toEqual([
+      'https://sih-prototype-xi-eight.vercel.app/verify/qr-public-1',
+      'https://sih-prototype-xi-eight.vercel.app/verify/qr-public-1',
+    ]);
+    expect(reportMock.create).not.toHaveBeenCalled();
+    expect(reportMock.update).not.toHaveBeenCalled();
+  });
+
+  it('does not render missing or revoked reports', async () => {
+    reportMock.findUnique.mockResolvedValueOnce(null);
+    await expect(readReportPdf('missing')).rejects.toBeInstanceOf(DatabaseNotFoundError);
+    reportMock.findUnique.mockResolvedValueOnce({
+      ...report,
+      revokedAt: date,
+      session: session(),
+    });
+    await expect(readReportPdf('report-1')).rejects.toBeInstanceOf(DatabaseNotFoundError);
+    expect(renderMock).not.toHaveBeenCalled();
+  });
+
+  it('logs an in-memory renderer failure before returning a safe mapped error', async () => {
+    const rendererError = new Error('PDF renderer failed internally');
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    renderMock.mockRejectedValue(rendererError);
+    await expect(readReportPdf('report-1')).rejects.toThrow(
+      'Unable to complete the report database operation'
+    );
+    expect(errorLog).toHaveBeenCalledWith(
+      '[report.service] In-memory report rendering failed',
+      expect.objectContaining({
+        name: 'Error',
+        message: 'PDF renderer failed internally',
+        stack: expect.any(String),
+      })
+    );
+    errorLog.mockRestore();
   });
 });
 
