@@ -1,0 +1,425 @@
+// ============================================================================
+// NAWI R76 — Prisma Schema
+// Database: PostgreSQL
+//
+// Design principles:
+//  - Decimal (NUMERIC) for all metrological values — never Float.
+//  - Json fields for observation data and compliance trace so future R76 tests
+//    can be added without a schema migration per test type.
+//  - RulesetVersion model tracks which edition of OIML R76 was used for each
+//    evaluation, enabling multi-standard support in future.
+//  - All enums mirror the TypeScript domain enums in src/lib/r76/types/ where
+//    applicable; the mapping is documented at each enum.
+//  - Relations use named strings wherever a model holds multiple FK columns
+//    pointing to the same target (e.g. User has technician / reviewer / approver).
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+/// User roles that control workflow access.
+enum Role {
+  LAB_TECHNICIAN
+  REVIEWING_OFFICER
+  APPROVING_OFFICER
+  ADMIN
+}
+
+/// Mirrors AccuracyClass in src/lib/r76/types/instrument.ts
+enum AccuracyClass {
+  I     // Special accuracy — laboratory / analytical balances
+  II    // High accuracy — trade, pharmacy
+  III   // Medium accuracy — industrial, retail
+  IIII  // Ordinary accuracy — coarse weighing
+}
+
+/// Mirrors InstrumentType in src/lib/r76/types/instrument.ts.
+/// MULTI_RANGE and MULTI_INTERVAL are reserved — not yet implemented by the R76 engine.
+enum InstrumentType {
+  SINGLE_RANGE
+  MULTI_RANGE    // reserved
+  MULTI_INTERVAL // reserved
+}
+
+/// Mirrors VerificationContext in src/lib/r76/types/verification.ts
+enum VerificationContext {
+  INITIAL_VERIFICATION
+  SUBSEQUENT_VERIFICATION
+  SERVICE_INSPECTION
+}
+
+/// Mirrors TestType in src/lib/r76/types/test.ts
+enum TestType {
+  WEIGHING_PERFORMANCE
+  REPEATABILITY
+  ECCENTRIC_LOADING
+}
+
+/// Mirrors TestOutcome in src/lib/r76/types/results.ts
+enum TestOutcome {
+  PASS
+  FAIL
+  REQUIRES_RETEST
+}
+
+/// Lifecycle status of a TestSession through the approval workflow.
+enum SessionStatus {
+  DRAFT             // Technician is still entering observations
+  IN_PROGRESS       // Observations partially recorded
+  PENDING_REVIEW    // Submitted by technician, awaiting reviewing officer
+  PENDING_APPROVAL  // Reviewed, awaiting approving officer
+  APPROVED          // Fully approved — triggers report generation
+  REJECTED          // Rejected at review or approval stage
+  CANCELLED         // Withdrawn before completion
+}
+
+/// Actions recorded in the Approval audit trail for a TestSession.
+enum ApprovalAction {
+  SUBMIT_FOR_REVIEW // Technician submits
+  REVIEW_APPROVE    // Reviewing officer passes
+  REVIEW_REJECT     // Reviewing officer rejects
+  FINAL_APPROVE     // Approving officer grants approval
+  FINAL_REJECT      // Approving officer rejects
+  CANCEL            // Session cancelled
+}
+
+/// Coarse action categories stored in AuditLog.
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  SUBMIT
+  APPROVE
+  REJECT
+  CANCEL
+  GENERATE_REPORT
+  LOGIN
+  LOGOUT
+}
+
+// ─── Models ──────────────────────────────────────────────────────────────────
+
+/// Platform user with role-based access.
+model User {
+  id           String    @id @default(cuid())
+  name         String
+  email        String    @unique
+  passwordHash String
+  role         Role
+  active       Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime? // soft-delete — retained for audit history
+
+  // Relations (named to disambiguate multiple FK columns on TestSession)
+  registeredInstruments Instrument[]  @relation("RegisteredBy")
+  technicianSessions    TestSession[] @relation("Technician")
+  reviewerSessions      TestSession[] @relation("Reviewer")
+  approverSessions      TestSession[] @relation("Approver")
+  approvals             Approval[]
+  auditLogs             AuditLog[]
+
+  @@map("users")
+}
+
+/// Tracks which edition of OIML R76 (or future standard) was applied.
+/// Stored on each TestSession and TestResult so results remain auditable
+/// if the ruleset is updated.
+model RulesetVersion {
+  id            String   @id @default(cuid())
+  /// E.g. "OIML R76-1"
+  standard      String
+  /// E.g. "2006"
+  version       String
+  effectiveDate DateTime
+  notes         String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  sessions TestSession[]
+  results  TestResult[]
+
+  @@unique([standard, version])
+  @@map("ruleset_versions")
+}
+
+/// Instrument manufacturer registry.
+model Manufacturer {
+  id               String   @id @default(cuid())
+  name             String
+  country          String?
+  registrationCode String?  @unique
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  instruments Instrument[]
+
+  @@map("manufacturers")
+}
+
+/// Physical Non-Automatic Weighing Instrument (NAWI) submitted for evaluation.
+/// All metrological fields mirror src/lib/r76/types/instrument.ts (Instrument interface).
+/// Decimal precision: 18,8 for mass values; 8,6 for dimensionless fractions.
+model Instrument {
+  id             String         @id @default(cuid())
+  manufacturer   Manufacturer   @relation(fields: [manufacturerId], references: [id])
+  manufacturerId String
+  model          String
+  serialNumber   String?
+
+  // ── Metrological characteristics ────────────────────────────────────────
+  // Stored as NUMERIC (Decimal) — never Float — to preserve regulatory precision.
+  accuracyClass  AccuracyClass
+  instrumentType InstrumentType @default(SINGLE_RANGE)
+
+  /// Maximum capacity (Max) in kg. R76-1 §3.7
+  max Decimal @db.Decimal(18, 6)
+
+  /// Minimum capacity (Min) in kg. R76-1 §4.4
+  min Decimal @db.Decimal(18, 6)
+
+  /// Verification scale interval (e) in kg. R76-1 §3.4
+  e Decimal @db.Decimal(18, 8)
+
+  /// Actual scale interval (d) in kg. R76-1 §3.3
+  d Decimal @db.Decimal(18, 8)
+
+  /// Number of load-receptor support points. Governs eccentric-loading test positions. R76-1 §3.9.2
+  numberOfSupportPoints Int @default(4)
+
+  // ── Device flags ────────────────────────────────────────────────────────
+  /// Additive tare device fitted. R76-1 §4.3.2
+  additiveTareEffect Boolean @default(false)
+
+  /// Auto-zero or zero-tracking device fitted. R76-1 §4.6
+  hasAutoZeroOrTracking Boolean @default(false)
+
+  /// Initial zero-setting device fitted. R76-1 §4.5
+  hasInitialZeroSettingDevice Boolean @default(false)
+
+  /// Range of initial zero-setting device as a fraction of Max (e.g. 0.20 = 20%). R76-1 §4.5
+  initialZeroSettingRange Decimal @default(0) @db.Decimal(8, 6)
+
+  /// Fine-indication (auxiliary) display device fitted (d_f < d). R76-1 §3.5
+  hasFineDisplayDevice Boolean @default(false)
+
+  // ── Audit ────────────────────────────────────────────────────────────────
+  registeredById String?
+  registeredBy   User?    @relation("RegisteredBy", fields: [registeredById], references: [id])
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  sessions TestSession[]
+
+  @@index([manufacturerId])
+  @@map("instruments")
+}
+
+/// A complete evaluation session linking an instrument to a set of R76 tests
+/// and tracking it through the full approval workflow.
+model TestSession {
+  id                  String             @id @default(cuid())
+  instrument          Instrument         @relation(fields: [instrumentId], references: [id])
+  instrumentId        String
+  verificationContext VerificationContext
+  status              SessionStatus      @default(DRAFT)
+
+  /// Ruleset edition applied to this session — captured at creation.
+  rulesetVersion   RulesetVersion @relation(fields: [rulesetVersionId], references: [id])
+  rulesetVersionId String
+
+  // ── Workflow participants ────────────────────────────────────────────────
+  technician   User    @relation("Technician", fields: [technicianId], references: [id])
+  technicianId String
+  reviewer     User?   @relation("Reviewer", fields: [reviewerId], references: [id])
+  reviewerId   String?
+  approver     User?   @relation("Approver", fields: [approverId], references: [id])
+  approverId   String?
+
+  notes       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+
+  observations TestObservation[]
+  results      TestResult[]
+  approvals    Approval[]
+  reports      Report[]
+  auditLogs    AuditLog[]        @relation("SessionAudit")
+
+  @@index([instrumentId])
+  @@index([technicianId])
+  @@index([reviewerId])
+  @@index([approverId])
+  @@index([status])
+  @@map("test_sessions")
+}
+
+/// Raw observation data recorded by an inspector for a single R76 test.
+///
+/// observationData is a flexible Json field whose schema matches the domain
+/// observation types in src/lib/r76/types/observations.ts:
+///   - WeighingPerformanceObservation  (testType = WEIGHING_PERFORMANCE)
+///   - RepeatabilityObservation        (testType = REPEATABILITY)
+///   - EccentricLoadingObservation     (testType = ECCENTRIC_LOADING)
+///
+/// Storing observations in Json avoids a new table for every future R76 test
+/// type while keeping raw inputs auditable. Structured validation is enforced
+/// at the API/engine layer, not in the database.
+model TestObservation {
+  id            String      @id @default(cuid())
+  session       TestSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sessionId     String
+  testType      TestType
+  sequenceIndex Int         @default(0)
+
+  /// Mirrors the observation shape from src/lib/r76/types/observations.ts.
+  observationData Json
+  observationFingerprint String?
+
+  createdAt DateTime @default(now())
+
+  @@index([sessionId, testType])
+  @@map("test_observations")
+}
+
+/// Compliance result for a single R76 test within a session.
+///
+/// complianceTrace stores the full ComplianceTrace structure produced by the
+/// R76 engine (src/lib/r76/types/results.ts — ComplianceTrace interface)
+/// verbatim, so the evaluation can always be reproduced and audited exactly
+/// as it was at the time of approval.
+model TestResult {
+  id        String      @id @default(cuid())
+  session   TestSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sessionId String
+  testType  TestType
+  outcome   TestOutcome
+
+  // ── Computed values — NUMERIC for regulatory auditability ────────────────
+  /// Maximum absolute calculated error across all observations in this test, in kg.
+  maxAbsoluteError Decimal @db.Decimal(18, 8)
+
+  /// Maximum Permissible Error (MPE) applicable to this test, in kg.
+  mpe Decimal @db.Decimal(18, 8)
+
+  /// For repeatability only: range R = Imax − Imin, in kg.
+  repeatabilityRange Decimal? @db.Decimal(18, 8)
+
+  // ── Regulatory provenance ────────────────────────────────────────────────
+  /// Primary OIML R76 clause / annex reference string (e.g. "R76-2 §4.2").
+  r76Reference String
+
+  /// Human-readable outcome explanation produced by the engine.
+  explanation String
+
+  /// Ruleset version snapshot at time of evaluation.
+  rulesetVersion   RulesetVersion @relation(fields: [rulesetVersionId], references: [id])
+  rulesetVersionId String
+
+  // ── Full Compliance Trace ────────────────────────────────────────────────
+  /// Verbatim ComplianceTrace JSON from src/lib/r76/types/results.ts.
+  /// Contains: instrumentContext, references[], inputs, calculationSteps[],
+  /// mpeTrace (MPETraceDetail), comparison, and outcome.
+  complianceTrace Json
+  evaluatedObservationFingerprint String?
+  evaluatedConfigFingerprint      String?
+
+  createdAt DateTime @default(now())
+
+  @@index([sessionId, testType])
+  @@map("test_results")
+}
+
+/// Immutable record of each workflow action taken on a TestSession.
+/// Builds the full approval audit trail.
+model Approval {
+  id        String         @id @default(cuid())
+  session   TestSession    @relation(fields: [sessionId], references: [id])
+  sessionId String
+  user      User           @relation(fields: [userId], references: [id])
+  userId    String
+  action    ApprovalAction
+  comments  String?
+  createdAt DateTime       @default(now())
+
+  @@index([sessionId])
+  @@map("approvals")
+}
+
+/// Generated compliance certificate/report for an approved TestSession.
+model Report {
+  id        String      @id @default(cuid())
+  session   TestSession @relation(fields: [sessionId], references: [id])
+  sessionId String
+
+  /// Human-readable sequential reference number, e.g. "NAWI-2026-000123".
+  referenceNumber String @unique
+
+  /// Storage path or URL to the human-readable output (PDF or HTML).
+  humanReadablePath String?
+
+  /// Storage path or URL to the machine-readable export (JSON or XML).
+  machineReadablePath String?
+
+  /// Structured digital-signature metadata (algorithm, certificate thumbprint,
+  /// signing timestamp, etc.). Stored as Json to support multiple signing schemes.
+  digitalSignatureMetadata Json?
+
+  /// Unique identifier embedded in the QR code printed on the report.
+  /// Used by the public verification endpoint to authenticate printed reports.
+  qrVerificationId String @unique @default(cuid())
+
+  /// Increments on regeneration so every version of a report is traceable.
+  version Int @default(1)
+
+  issuedAt  DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  revokedAt DateTime? // set if report is subsequently invalidated
+
+  @@index([sessionId])
+  @@map("reports")
+}
+
+/// Append-only system audit log.
+/// Records every significant state change across all entity types.
+model AuditLog {
+  id        String      @id @default(cuid())
+  user      User?       @relation(fields: [userId], references: [id])
+  userId    String?
+  session   TestSession? @relation("SessionAudit", fields: [sessionId], references: [id])
+  sessionId String?
+
+  /// The type name of the affected entity, e.g. "TestSession", "Instrument".
+  entityType String
+
+  /// The primary-key ID of the affected entity.
+  entityId String
+
+  action AuditAction
+
+  /// JSON snapshot of the entity state immediately before the action.
+  before Json?
+
+  /// JSON snapshot of the entity state immediately after the action.
+  after Json?
+
+  /// Optional request metadata for security auditing.
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}

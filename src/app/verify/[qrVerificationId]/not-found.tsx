@@ -1,0 +1,3 @@
+export default function VerificationNotFound() {
+  return <main className="flex min-h-screen items-center justify-center bg-[#F7F9FB] px-4"><section className="w-full max-w-lg rounded-lg border border-[#D9E2EC] bg-white p-8 text-center shadow-[0_1px_3px_rgba(16,24,40,0.08)]"><p className="m-0 text-[0.64rem] font-bold uppercase tracking-[0.12em] text-[#667085]">NAWI Report Verification</p><h1 className="m-0 mt-2 text-xl font-bold text-[#1D2226]">Report not found</h1><p className="m-0 mt-2 text-[0.76rem] leading-relaxed text-[#667085]">No public verification record matches this identifier.</p></section></main>;
+}

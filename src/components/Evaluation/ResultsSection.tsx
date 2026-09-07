@@ -9,8 +9,19 @@ import type { EccentricityTestResult } from '@/lib/r76/calculations/eccentricity
 import { ComplianceIcon } from '@/components/ui/ComplianceIcon';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { ComplianceTracePanel } from './ComplianceTracePanel';
+import {
+  engineTypeForStoredType,
+  storedOutcomeForDisplay,
+  type SavedTestResultResponse,
+} from './result-persistence';
 
-interface ResultsSectionProps { result: OrchestrationResult | null; error: string | null; loading: boolean; }
+interface ResultsSectionProps {
+  result: OrchestrationResult | null;
+  savedResults: SavedTestResultResponse[];
+  savedResultsStale: boolean;
+  error: string | null;
+  loading: boolean;
+}
 
 const TEST_TYPE_LABEL: Record<TestType, string> = {
   [TestType.WeighingPerformance]: 'Weighing Performance',
@@ -18,7 +29,13 @@ const TEST_TYPE_LABEL: Record<TestType, string> = {
   [TestType.EccentricLoading]: 'Eccentric Loading',
 };
 
-export function ResultsSection({ result, error, loading }: ResultsSectionProps) {
+export function ResultsSection({
+  result,
+  savedResults,
+  savedResultsStale,
+  error,
+  loading,
+}: ResultsSectionProps) {
   return (
     <div className="flex flex-col gap-4">
       <ApplicableTestsPanel result={result} loading={loading} />
@@ -32,8 +49,35 @@ export function ResultsSection({ result, error, loading }: ResultsSectionProps) 
         </section>
       )}
 
-      {!loading && !error && !result && (
+      {!loading && !error && !result && savedResults.length === 0 && (
         <StatePanel>Complete the instrument record and observations, then select “Evaluate Compliance” to generate the technical result.</StatePanel>
+      )}
+
+      {!loading && !error && !result && savedResults.length > 0 && (
+        <section className="overflow-hidden rounded-lg border border-[#D9E2EC] bg-white shadow-[0_1px_2px_rgba(16,24,40,0.04)]">
+          <PanelHeader
+            icon={<ComplianceIcon name="result" />}
+            eyebrow="Persisted evaluation record"
+            title="Last Saved Evaluation"
+          />
+          <div className="grid gap-3 p-4">
+            {savedResultsStale && (
+              <p
+                role="status"
+                className="m-0 rounded-[5px] border border-[#FEDF89] bg-[#FFFAEB] px-3 py-2 text-[0.7rem] font-semibold text-[#B54708]"
+              >
+                Observations changed — re-evaluate to update the compliance result. The results and traces below belong to the previous saved evaluation.
+              </p>
+            )}
+            {savedResults.map((savedResult) => (
+              <PersistedResultCard
+                key={savedResult.id}
+                result={savedResult}
+                stale={savedResultsStale}
+              />
+            ))}
+          </div>
+        </section>
       )}
 
       {!loading && !error && result && (
@@ -42,6 +86,44 @@ export function ResultsSection({ result, error, loading }: ResultsSectionProps) 
           {result.evaluatedTests.map((test) => <TestResultCard key={test.testType} test={test} />)}
         </>
       )}
+    </div>
+  );
+}
+
+function PersistedResultCard({
+  result,
+  stale,
+}: {
+  result: SavedTestResultResponse;
+  stale: boolean;
+}) {
+  const testType = engineTypeForStoredType(result.testType);
+  const outcome = storedOutcomeForDisplay(result.outcome);
+  return (
+    <div className="rounded-md border border-[#D9E2EC]">
+      <div className="flex items-center justify-between gap-3 border-b border-[#E4EAF0] bg-[#F8FAFC] px-3 py-2">
+        <h3 className="m-0 text-[0.75rem] font-bold text-[#1D2226]">{TEST_TYPE_LABEL[testType]}</h3>
+        <StatusBadge status={outcome} size="sm" />
+      </div>
+      <div className="p-3">
+        <Comparison
+          leftLabel="Maximum absolute error"
+          leftValue={`${result.maxAbsoluteError} kg`}
+          rightLabel="Persisted MPE"
+          rightValue={`±${result.mpe} kg`}
+        />
+        {result.repeatabilityRange !== null && (
+          <div className="mt-3">
+            <Metric label="Repeatability range" value={`${result.repeatabilityRange} kg`} />
+          </div>
+        )}
+        <Explanation value={result.explanation} />
+        <Reference value={result.r76Reference} />
+        <ComplianceTracePanel
+          traces={result.complianceTrace}
+          label={stale ? 'View Previous Compliance Trace' : 'View Saved Compliance Trace'}
+        />
+      </div>
     </div>
   );
 }

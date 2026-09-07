@@ -60,7 +60,7 @@ export function InstrumentSection({ value, onChange, verificationContext, onVeri
         <div className="border-t border-[#E4EAF0] pt-4">
           <GroupHeading>Instrument Configuration</GroupHeading>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="Instrument Type" hint="Current prototype supports single-range NAWI only"><TextInput value="single_range" onChange={() => {}} disabled /></Field>
+            <Field label="Instrument Type" hint="Registry value; the current evaluation engine supports single-range NAWI only"><TextInput value={value.instrumentType.replaceAll('_', ' ')} onChange={() => {}} disabled /></Field>
             <Field label="Verification Context"><Select value={verificationContext} onChange={(v) => onVerificationContextChange(v as VerificationContext)} options={VERIFICATION_CONTEXT_OPTIONS} /></Field>
             <Field label="Number of Support Points" hint="Used for eccentric-loading selection"><TextInput type="number" value={value.numberOfSupportPoints} onChange={(v) => set('numberOfSupportPoints', v)} placeholder="4" /></Field>
             <Field label="Initial Zero-Setting Range (kg)" hint={value.hasInitialZeroSettingDevice ? 'Range in the same unit as Max' : 'Enable the device to enter a range'}><TextInput type="number" step="any" value={value.initialZeroSettingRange} onChange={(v) => set('initialZeroSettingRange', v)} disabled={!value.hasInitialZeroSettingDevice} placeholder="0" /></Field>

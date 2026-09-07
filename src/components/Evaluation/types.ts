@@ -19,6 +19,7 @@ export interface InstrumentFormState {
   model: string;
   serialNumber: string;
   accuracyClass: AccuracyClass;
+  instrumentType: 'SINGLE_RANGE' | 'MULTI_RANGE' | 'MULTI_INTERVAL';
   max: string;
   min: string;
   e: string;
@@ -38,6 +39,7 @@ export function createDefaultInstrument(): InstrumentFormState {
     model: '',
     serialNumber: '',
     accuracyClass: AccuracyClass.III,
+    instrumentType: 'SINGLE_RANGE',
     max: '',
     min: '',
     e: '',
