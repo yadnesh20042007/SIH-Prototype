@@ -4,8 +4,11 @@ import { Instrument } from '../../../../lib/r76/types/instrument';
 import { VerificationContext } from '../../../../lib/r76/types/verification';
 import { evaluateSavedSession } from '@/lib/services/session-evaluation.service';
 import { DatabaseConflictError, DatabaseNotFoundError } from '@/lib/db/errors';
+import { forbiddenOwnership, requireApiUser, technicianOwnsSession } from '@/lib/auth/api-access';
 
 export async function POST(req: Request) {
+  const access = await requireApiUser(['LAB_TECHNICIAN', 'ADMIN']);
+  if (!access.authorized) return access.response;
   try {
     let body;
     try {
@@ -22,6 +25,7 @@ export async function POST(req: Request) {
       if (typeof body.sessionId !== 'string' || !body.sessionId.trim()) {
         return NextResponse.json({ error: 'Invalid test session ID' }, { status: 400 });
       }
+      if (!await technicianOwnsSession(access.user, body.sessionId.trim())) return forbiddenOwnership();
       return NextResponse.json(await evaluateSavedSession(body.sessionId.trim(), {
         instrument: body.instrument,
         verificationContext: body.verificationContext,

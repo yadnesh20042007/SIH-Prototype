@@ -5,6 +5,7 @@ import {
 } from '@/lib/db/errors';
 import { createInstrument, listInstruments } from '@/lib/services/instrument.service';
 import { validateInstrumentCreate } from '@/lib/validation/instrument';
+import { requireApiUser } from '@/lib/auth/api-access';
 
 function serviceErrorResponse(error: unknown): Response {
   if (error instanceof DatabaseNotFoundError) {
@@ -20,6 +21,8 @@ function serviceErrorResponse(error: unknown): Response {
 }
 
 export async function POST(request: Request): Promise<Response> {
+  const access = await requireApiUser(['LAB_TECHNICIAN', 'ADMIN']);
+  if (!access.authorized) return access.response;
   let body: unknown;
   try {
     body = await request.json();
@@ -36,7 +39,7 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   try {
-    return Response.json(await createInstrument(validation.data), { status: 201 });
+    return Response.json(await createInstrument(validation.data, access.user.id), { status: 201 });
   } catch (error) {
     return serviceErrorResponse(error);
   }

@@ -5,6 +5,7 @@ import {
 } from '@/lib/db/errors';
 import { getInstrumentById, updateInstrument } from '@/lib/services/instrument.service';
 import { validateInstrumentUpdate } from '@/lib/validation/instrument';
+import { requireApiUser } from '@/lib/auth/api-access';
 
 interface InstrumentRouteContext {
   params: Promise<{ id: string }>;
@@ -44,6 +45,8 @@ export async function PATCH(
   request: Request,
   context: InstrumentRouteContext
 ): Promise<Response> {
+  const access = await requireApiUser(['LAB_TECHNICIAN', 'ADMIN']);
+  if (!access.authorized) return access.response;
   const id = await routeId(context);
   if (!id) return Response.json({ error: 'Invalid instrument ID' }, { status: 400 });
 

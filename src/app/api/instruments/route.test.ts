@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+
+vi.mock('@/lib/auth/api-access', () => ({
+  requireApiUser: vi.fn(async () => ({ authorized: true, user: { id: 'authenticated-user', name: 'Authenticated User', email: 'user@example.test', role: 'ADMIN' } })),
+  technicianOwnsSession: vi.fn(async () => true),
+  technicianOwnsObservation: vi.fn(async () => true),
+  technicianOwnsResult: vi.fn(async () => true),
+  forbiddenOwnership: vi.fn(() => Response.json({ error: 'Forbidden' }, { status: 403 })),
+}));
 const { serviceMock } = vi.hoisted(() => ({
   serviceMock: {
     createInstrument: vi.fn(),
@@ -64,7 +72,7 @@ describe('Instrument collection route unit tests (mocked service)', () => {
 
     expect(response.status).toBe(201);
     expect(await response.json()).toMatchObject({ id: 'instrument-1', model: 'Precision 1000' });
-    expect(serviceMock.createInstrument).toHaveBeenCalledWith(validCreate);
+    expect(serviceMock.createInstrument).toHaveBeenCalledWith(validCreate, 'authenticated-user');
   });
 
   it('preserves exact decimal strings in the create response', async () => {

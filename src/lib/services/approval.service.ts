@@ -78,7 +78,7 @@ function toWorkflowSession(session: TestSession): ApprovalWorkflowResult['sessio
 }
 
 function requireRole(actual: Role, expected: Role, action: ApprovalActionValue): void {
-  if (actual !== expected) {
+  if (actual !== expected && actual !== 'ADMIN') {
     throw new ApprovalWorkflowValidationError(`${action} requires the ${expected} role`);
   }
 }
@@ -104,7 +104,7 @@ function transitionFor(
     case 'SUBMIT_FOR_REVIEW':
       requireStatus(session.status, 'IN_PROGRESS', action);
       requireRole(user.role, 'LAB_TECHNICIAN', action);
-      if (user.id !== session.technicianId) {
+      if (user.role !== 'ADMIN' && user.id !== session.technicianId) {
         throw new ApprovalWorkflowValidationError(
           'Only the technician assigned to this session may submit it for review'
         );
@@ -177,13 +177,14 @@ async function assertResultsReady(
  * in one transaction. This is intentionally the only approval-write operation.
  */
 export async function createApproval(
-  input: ApprovalCreatePayload
+  input: ApprovalCreatePayload,
+  authenticatedUserId: string,
 ): Promise<ApprovalWorkflowResult> {
   try {
     return await prisma.$transaction(async (tx) => {
       const [session, user] = await Promise.all([
         tx.testSession.findUnique({ where: { id: input.sessionId } }),
-        tx.user.findUnique({ where: { id: input.userId } }),
+        tx.user.findUnique({ where: { id: authenticatedUserId } }),
       ]);
 
       if (!session) throw new DatabaseNotFoundError('TestSession not found');
@@ -207,7 +208,7 @@ export async function createApproval(
       const approval = await tx.approval.create({
         data: {
           sessionId: input.sessionId,
-          userId: input.userId,
+          userId: authenticatedUserId,
           action: input.action,
           ...(input.comments !== undefined ? { comments: input.comments } : {}),
           ...(input.createdAt !== undefined ? { createdAt: input.createdAt } : {}),

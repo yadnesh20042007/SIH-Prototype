@@ -12,6 +12,7 @@ import {
   TEST_SESSION_STATUSES,
   type TestSessionStatus,
 } from '@/lib/validation/test-session';
+import { requireApiUser } from '@/lib/auth/api-access';
 
 function serviceErrorResponse(error: unknown): Response {
   if (error instanceof DatabaseNotFoundError) {
@@ -27,6 +28,8 @@ function serviceErrorResponse(error: unknown): Response {
 }
 
 export async function POST(request: Request): Promise<Response> {
+  const access = await requireApiUser(['LAB_TECHNICIAN', 'ADMIN']);
+  if (!access.authorized) return access.response;
   let body: unknown;
   try {
     body = await request.json();
@@ -34,7 +37,13 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: 'Malformed JSON payload' }, { status: 400 });
   }
 
-  const validation = validateTestSessionCreate(body);
+  if (typeof body === 'object' && body !== null &&
+    ['technicianId', 'reviewerId', 'approverId'].some((field) => field in body)) {
+    return Response.json({ error: 'Actor identity cannot be supplied by the client' }, { status: 400 });
+  }
+  const validation = validateTestSessionCreate({
+    ...(body as Record<string, unknown>), technicianId: access.user.id,
+  });
   if (!validation.success || !validation.data) {
     return Response.json(
       { error: 'Validation failed', errors: validation.errors },

@@ -4,6 +4,7 @@ import {
   updateManufacturer,
 } from '@/lib/services/manufacturer.service';
 import { validateManufacturerUpdate } from '@/lib/validation/manufacturer';
+import { requireApiUser } from '@/lib/auth/api-access';
 
 interface ManufacturerRouteContext {
   params: Promise<{ id: string }>;
@@ -29,6 +30,8 @@ export async function GET(
   _request: Request,
   context: ManufacturerRouteContext
 ): Promise<Response> {
+  const access = await requireApiUser(['LAB_TECHNICIAN', 'ADMIN']);
+  if (!access.authorized) return access.response;
   const id = await routeId(context);
   if (!id) return Response.json({ error: 'Invalid manufacturer ID' }, { status: 400 });
 

@@ -81,42 +81,17 @@ describe('TestSession service unit tests (mocked Prisma)', () => {
     expect(testSessionMock.create).toHaveBeenCalledWith({ data: createInput });
   });
 
-  it('resolves the active prototype ruleset and seeded development technician', async () => {
+  it('resolves only the active prototype ruleset', async () => {
     rulesetVersionMock.findFirst.mockResolvedValue({
       id: 'ruleset-real-id',
       standard: 'OIML R76-1',
       version: '2006',
     });
-    userMock.findFirst.mockResolvedValue({
-      id: 'development-user-id',
-      name: 'Development User',
-      role: 'LAB_TECHNICIAN',
-    });
-    userMock.findFirst
-      .mockResolvedValueOnce({ id: 'technician-real-id', name: 'Development Lab Technician', role: 'LAB_TECHNICIAN' })
-      .mockResolvedValueOnce({ id: 'reviewer-real-id', name: 'Development Reviewing Officer', role: 'REVIEWING_OFFICER' })
-      .mockResolvedValueOnce({ id: 'approver-real-id', name: 'Development Approving Officer', role: 'APPROVING_OFFICER' });
-
     await expect(getDevelopmentTestSessionContext()).resolves.toEqual({
       rulesetVersion: {
         id: 'ruleset-real-id',
         standard: 'OIML R76-1',
         version: '2006',
-      },
-      technician: {
-        id: 'technician-real-id',
-        name: 'Development Lab Technician',
-        role: 'LAB_TECHNICIAN',
-      },
-      reviewer: {
-        id: 'reviewer-real-id',
-        name: 'Development Reviewing Officer',
-        role: 'REVIEWING_OFFICER',
-      },
-      approver: {
-        id: 'approver-real-id',
-        name: 'Development Approving Officer',
-        role: 'APPROVING_OFFICER',
       },
     });
     expect(rulesetVersionMock.findFirst).toHaveBeenCalledWith({
@@ -127,33 +102,7 @@ describe('TestSession service unit tests (mocked Prisma)', () => {
       },
       select: { id: true, standard: true, version: true },
     });
-    expect(userMock.findFirst).toHaveBeenNthCalledWith(1, {
-      where: {
-        email: 'dev.lab.technician@nawi-r76.local',
-        role: 'LAB_TECHNICIAN',
-        active: true,
-        deletedAt: null,
-      },
-      select: { id: true, name: true, role: true },
-    });
-    expect(userMock.findFirst).toHaveBeenNthCalledWith(2, {
-      where: {
-        email: 'dev.reviewing.officer@nawi-r76.local',
-        role: 'REVIEWING_OFFICER',
-        active: true,
-        deletedAt: null,
-      },
-      select: { id: true, name: true, role: true },
-    });
-    expect(userMock.findFirst).toHaveBeenNthCalledWith(3, {
-      where: {
-        email: 'dev.approving.officer@nawi-r76.local',
-        role: 'APPROVING_OFFICER',
-        active: true,
-        deletedAt: null,
-      },
-      select: { id: true, name: true, role: true },
-    });
+    expect(userMock.findFirst).not.toHaveBeenCalled();
   });
 
   it('reports missing development bootstrap data safely', async () => {

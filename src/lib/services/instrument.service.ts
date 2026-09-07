@@ -73,10 +73,13 @@ function toInstrumentRecord(instrument: InstrumentWithManufacturer): InstrumentR
   };
 }
 
-export async function createInstrument(input: InstrumentCreatePayload): Promise<InstrumentRecord> {
+export async function createInstrument(
+  input: InstrumentCreatePayload,
+  registeredById?: string,
+): Promise<InstrumentRecord> {
   try {
     const instrument = await prisma.instrument.create({
-      data: input,
+      data: { ...input, ...(registeredById ? { registeredById } : {}) },
       include: manufacturerInclude,
     });
     return toInstrumentRecord(instrument);

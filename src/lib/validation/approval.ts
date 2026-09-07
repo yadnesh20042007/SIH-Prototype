@@ -13,7 +13,6 @@ export type ApprovalActionValue = (typeof APPROVAL_ACTIONS)[number];
 
 export interface ApprovalCreatePayload {
   sessionId: string;
-  userId: string;
   action: ApprovalActionValue;
   comments?: string | null;
   createdAt?: string;
@@ -34,7 +33,7 @@ function has(source: Record<string, unknown>, field: string): boolean {
 
 function requiredId(
   source: Record<string, unknown>,
-  field: 'sessionId' | 'userId',
+  field: 'sessionId',
   errors: FieldError[]
 ): string | undefined {
   const value = source[field];
@@ -62,8 +61,11 @@ export function validateApprovalCreate(
   if (!source) return { success: false, errors: result.errors };
 
   const sessionId = requiredId(source, 'sessionId', result.errors);
-  const userId = requiredId(source, 'userId', result.errors);
   let action: ApprovalActionValue | undefined;
+
+  if (has(source, 'userId') || has(source, 'reviewerId') || has(source, 'approverId')) {
+    result.add('userId', 'actor identity cannot be supplied by the client');
+  }
 
   if (!has(source, 'action') || source.action === null || source.action === undefined) {
     result.add('action', 'is required');
@@ -78,7 +80,6 @@ export function validateApprovalCreate(
 
   const data: Partial<ApprovalCreatePayload> = {};
   if (sessionId !== undefined) data.sessionId = sessionId;
-  if (userId !== undefined) data.userId = userId;
   if (action !== undefined) data.action = action;
 
   if (has(source, 'comments')) {

@@ -9,6 +9,7 @@ import {
   updateTestSession,
 } from '@/lib/services/test-session.service';
 import { validateTestSessionUpdate } from '@/lib/validation/test-session';
+import { forbiddenOwnership, requireApiUser, technicianOwnsSession } from '@/lib/auth/api-access';
 
 interface TestSessionRouteContext {
   params: Promise<{ id: string }>;
@@ -37,8 +38,11 @@ export async function GET(
   _request: Request,
   context: TestSessionRouteContext
 ): Promise<Response> {
+  const access = await requireApiUser(['LAB_TECHNICIAN', 'ADMIN']);
+  if (!access.authorized) return access.response;
   const id = await routeId(context);
   if (!id) return Response.json({ error: 'Invalid test session ID' }, { status: 400 });
+  if (!await technicianOwnsSession(access.user, id)) return forbiddenOwnership();
 
   try {
     return Response.json(await getTestSessionById(id), { status: 200 });

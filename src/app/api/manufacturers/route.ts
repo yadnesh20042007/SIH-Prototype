@@ -4,6 +4,7 @@ import {
   listManufacturers,
 } from '@/lib/services/manufacturer.service';
 import { validateManufacturerCreate } from '@/lib/validation/manufacturer';
+import { requireApiUser } from '@/lib/auth/api-access';
 
 function serviceErrorResponse(error: unknown): Response {
   if (error instanceof DatabaseNotFoundError) {
@@ -16,6 +17,8 @@ function serviceErrorResponse(error: unknown): Response {
 }
 
 export async function POST(request: Request): Promise<Response> {
+  const access = await requireApiUser(['LAB_TECHNICIAN', 'ADMIN']);
+  if (!access.authorized) return access.response;
   let body: unknown;
   try {
     body = await request.json();

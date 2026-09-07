@@ -1,4 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+vi.mock('@/lib/auth/api-access', () => ({
+  requireApiUser: vi.fn(async () => ({ authorized: true, user: { id: 'authenticated-user', name: 'Authenticated User', email: 'user@example.test', role: 'ADMIN' } })),
+  technicianOwnsSession: vi.fn(async () => true),
+  forbiddenOwnership: vi.fn(() => Response.json({ error: 'Forbidden' }, { status: 403 })),
+}));
 import { POST } from './route';
 import { validEvaluationFixture } from './fixture';
 

@@ -32,11 +32,6 @@ interface DevelopmentTestSessionContext {
     standard: string;
     version: string;
   };
-  technician: {
-    id: string;
-    name: string;
-    role: 'LAB_TECHNICIAN';
-  };
 }
 
 interface ApiErrorPayload {
@@ -173,7 +168,6 @@ export function InstrumentSessionActions({ instrumentId }: { instrumentId: strin
           instrumentId,
           verificationContext: form.verificationContext,
           rulesetVersionId: developmentContext.rulesetVersion.id,
-          technicianId: developmentContext.technician.id,
         }),
       });
       const payload = await readPayload(response);
@@ -283,11 +277,6 @@ export function InstrumentSessionActions({ instrumentId }: { instrumentId: strin
             <div>
               Ruleset: <span className="font-semibold text-[#344054]">
                 {developmentContext?.rulesetVersion.standard}:{developmentContext?.rulesetVersion.version}
-              </span>
-            </div>
-            <div>
-              Technician: <span className="font-semibold text-[#344054]">
-                {developmentContext?.technician.name}
               </span>
             </div>
           </div>

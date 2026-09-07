@@ -38,11 +38,6 @@ interface ApprovalRecord {
   user?: { name: string; role: string };
 }
 
-interface DevelopmentContext {
-  reviewer: { id: string; name: string };
-  approver: { id: string; name: string };
-}
-
 interface QueueItem {
   session: SessionRecord;
   instrument: InstrumentRecord;
@@ -92,7 +87,6 @@ function label(value: string): string {
 export function ApprovalQueueScreen({ mode }: { mode: QueueMode }) {
   const status: QueueStatus = mode === 'review' ? 'PENDING_REVIEW' : 'PENDING_APPROVAL';
   const [items, setItems] = useState<QueueItem[]>([]);
-  const [context, setContext] = useState<DevelopmentContext | null>(null);
   const [comments, setComments] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [actingId, setActingId] = useState<string | null>(null);
@@ -103,12 +97,8 @@ export function ApprovalQueueScreen({ mode }: { mode: QueueMode }) {
     setLoading(true);
     setError(null);
     try {
-      const [sessionsPayload, contextPayload] = await Promise.all([
-        jsonRequest(`/api/test-sessions?status=${status}`),
-        jsonRequest('/api/test-sessions/development-context'),
-      ]);
+      const sessionsPayload = await jsonRequest(`/api/test-sessions?status=${status}`);
       const sessions = sessionsPayload as SessionRecord[];
-      setContext(contextPayload as DevelopmentContext);
       setItems(await Promise.all(sessions.map(loadQueueItem)));
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Unable to load the approval queue.');
@@ -123,7 +113,6 @@ export function ApprovalQueueScreen({ mode }: { mode: QueueMode }) {
   }, [load]);
 
   async function decide(sessionId: string, approved: boolean): Promise<void> {
-    if (!context) return;
     setActingId(sessionId);
     setError(null);
     setMessage(null);
@@ -134,7 +123,6 @@ export function ApprovalQueueScreen({ mode }: { mode: QueueMode }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sessionId,
-          userId: reviewer ? context.reviewer.id : context.approver.id,
           action: reviewer
             ? approved ? 'REVIEW_APPROVE' : 'REVIEW_REJECT'
             : approved ? 'FINAL_APPROVE' : 'FINAL_REJECT',

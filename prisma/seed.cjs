@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports -- Prisma seed runs directly in Node CommonJS. */
 const { PrismaClient, Role } = require('@prisma/client');
+const bcrypt = require('bcryptjs');
 
 const prisma = new PrismaClient();
 
@@ -14,7 +15,6 @@ const prototypeRuleset = {
 const developmentTechnician = {
   name: 'Development Lab Technician',
   email: 'dev.lab.technician@nawi-r76.local',
-  passwordHash: 'DEVELOPMENT_ONLY_NO_AUTHENTICATION_CONFIGURED',
   role: Role.LAB_TECHNICIAN,
   active: true,
   deletedAt: null,
@@ -23,7 +23,6 @@ const developmentTechnician = {
 const developmentReviewer = {
   name: 'Development Reviewing Officer',
   email: 'dev.reviewing.officer@nawi-r76.local',
-  passwordHash: 'DEVELOPMENT_ONLY_NO_AUTHENTICATION_CONFIGURED',
   role: Role.REVIEWING_OFFICER,
   active: true,
   deletedAt: null,
@@ -32,13 +31,40 @@ const developmentReviewer = {
 const developmentApprover = {
   name: 'Development Approving Officer',
   email: 'dev.approving.officer@nawi-r76.local',
-  passwordHash: 'DEVELOPMENT_ONLY_NO_AUTHENTICATION_CONFIGURED',
   role: Role.APPROVING_OFFICER,
   active: true,
   deletedAt: null,
 };
 
+const developmentAdmin = {
+  name: 'Development Administrator',
+  email: 'dev.admin@nawi-r76.local',
+  role: Role.ADMIN,
+  active: true,
+  deletedAt: null,
+};
+
+function requireDemoPassword(name) {
+  const password = process.env[name];
+  if (!password || password.length < 12) {
+    throw new Error(`${name} must be set to a development-only password of at least 12 characters`);
+  }
+  return password;
+}
+
+async function seededUser(user, passwordVariable) {
+  return {
+    ...user,
+    passwordHash: await bcrypt.hash(requireDemoPassword(passwordVariable), 12),
+  };
+}
+
 async function main() {
+  const technician = await seededUser(developmentTechnician, 'DEMO_TECHNICIAN_PASSWORD');
+  const reviewer = await seededUser(developmentReviewer, 'DEMO_REVIEWER_PASSWORD');
+  const approver = await seededUser(developmentApprover, 'DEMO_APPROVER_PASSWORD');
+  const admin = await seededUser(developmentAdmin, 'DEMO_ADMIN_PASSWORD');
+
   await prisma.rulesetVersion.upsert({
     where: {
       standard_version: {
@@ -52,24 +78,30 @@ async function main() {
 
   await prisma.user.upsert({
     where: { email: developmentTechnician.email },
-    update: developmentTechnician,
-    create: developmentTechnician,
+    update: technician,
+    create: technician,
   });
 
   await prisma.user.upsert({
     where: { email: developmentReviewer.email },
-    update: developmentReviewer,
-    create: developmentReviewer,
+    update: reviewer,
+    create: reviewer,
   });
 
   await prisma.user.upsert({
     where: { email: developmentApprover.email },
-    update: developmentApprover,
-    create: developmentApprover,
+    update: approver,
+    create: approver,
+  });
+
+  await prisma.user.upsert({
+    where: { email: admin.email },
+    update: admin,
+    create: admin,
   });
 
   console.log(
-    'Development bootstrap complete: prototype ruleset, lab technician, reviewer, and approver are available.'
+    'Development bootstrap complete: prototype ruleset and four role accounts are available.'
   );
 }
 

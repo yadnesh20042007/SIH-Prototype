@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+
+vi.mock('@/lib/auth/api-access', () => ({
+  requireApiUser: vi.fn(async () => ({ authorized: true, user: { id: 'authenticated-user', name: 'Authenticated User', email: 'user@example.test', role: 'ADMIN' } })),
+  technicianOwnsSession: vi.fn(async () => true),
+  technicianOwnsObservation: vi.fn(async () => true),
+  technicianOwnsResult: vi.fn(async () => true),
+  forbiddenOwnership: vi.fn(() => Response.json({ error: 'Forbidden' }, { status: 403 })),
+}));
 const { serviceMock } = vi.hoisted(() => ({
   serviceMock: {
     createTestSession: vi.fn(),
@@ -19,7 +27,6 @@ const validCreate = {
   instrumentId: 'instrument-1',
   verificationContext: 'INITIAL_VERIFICATION',
   rulesetVersionId: 'ruleset-1',
-  technicianId: 'technician-1',
 };
 
 const session = {
@@ -59,7 +66,9 @@ describe('TestSession collection route unit tests (mocked service)', () => {
 
     expect(response.status).toBe(201);
     expect(await response.json()).toEqual(session);
-    expect(serviceMock.createTestSession).toHaveBeenCalledWith(validCreate);
+    expect(serviceMock.createTestSession).toHaveBeenCalledWith({
+      ...validCreate, technicianId: 'authenticated-user',
+    });
   });
 
   it('returns 400 for malformed JSON', async () => {
@@ -89,6 +98,12 @@ describe('TestSession collection route unit tests (mocked service)', () => {
 
   it('prevents clients from choosing workflow state during creation', async () => {
     const response = await POST(postRequest({ ...validCreate, status: 'PENDING_APPROVAL' }));
+    expect(response.status).toBe(400);
+    expect(serviceMock.createTestSession).not.toHaveBeenCalled();
+  });
+
+  it('rejects a caller-supplied fake technician identity', async () => {
+    const response = await POST(postRequest({ ...validCreate, technicianId: 'another-technician' }));
     expect(response.status).toBe(400);
     expect(serviceMock.createTestSession).not.toHaveBeenCalled();
   });

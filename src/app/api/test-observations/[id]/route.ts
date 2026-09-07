@@ -8,6 +8,7 @@ import {
   updateTestObservation,
 } from '@/lib/services/test-observation.service';
 import { validateTestObservationUpdate } from '@/lib/validation/test-observation';
+import { forbiddenOwnership, requireApiUser, technicianOwnsObservation } from '@/lib/auth/api-access';
 
 interface TestObservationRouteContext {
   params: Promise<{ id: string }>;
@@ -36,8 +37,11 @@ export async function GET(
   _request: Request,
   context: TestObservationRouteContext
 ): Promise<Response> {
+  const access = await requireApiUser(['LAB_TECHNICIAN', 'ADMIN']);
+  if (!access.authorized) return access.response;
   const id = await routeId(context);
   if (!id) return Response.json({ error: 'Invalid test observation ID' }, { status: 400 });
+  if (!await technicianOwnsObservation(access.user, id)) return forbiddenOwnership();
 
   try {
     return Response.json(await getTestObservationById(id), { status: 200 });

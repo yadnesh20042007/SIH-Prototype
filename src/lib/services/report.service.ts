@@ -47,6 +47,22 @@ export interface ReportRecord {
   verificationUrl: string;
 }
 
+export type ReportStateFilter = 'ALL' | 'ACTIVE' | 'REVOKED';
+
+export interface ReportListFilters {
+  testSessionId?: string;
+  query?: string;
+  state?: ReportStateFilter;
+}
+
+export interface ReportRepositoryRecord extends ReportRecord {
+  manufacturer: string;
+  instrumentModel: string;
+  instrumentType: string;
+  accuracyClass: string;
+  complianceOutcome: 'PASS' | 'FAIL' | 'REQUIRES_RETEST' | 'NOT_AVAILABLE';
+}
+
 export class ReportEligibilityError extends DatabaseConflictError {
   constructor(message: string) {
     super(message);
@@ -181,14 +197,59 @@ export async function generateApprovedSessionReport(testSessionId: string): Prom
   }
 }
 
-export async function listReports(testSessionId?: string): Promise<ReportRecord[]> {
+const reportRepositoryInclude = {
+  session: {
+    include: {
+      instrument: { include: { manufacturer: true } },
+      results: { select: { outcome: true } },
+    },
+  },
+} satisfies Prisma.ReportInclude;
+
+type RepositoryReport = Prisma.ReportGetPayload<{ include: typeof reportRepositoryInclude }>;
+
+function repositoryOutcome(report: RepositoryReport): ReportRepositoryRecord['complianceOutcome'] {
+  const outcomes = report.session.results.map(result => result.outcome);
+  if (!outcomes.length) return 'NOT_AVAILABLE';
+  if (outcomes.includes('FAIL')) return 'FAIL';
+  if (outcomes.includes('REQUIRES_RETEST')) return 'REQUIRES_RETEST';
+  return 'PASS';
+}
+
+function toRepositoryRecord(report: RepositoryReport): ReportRepositoryRecord {
+  const instrument = report.session.instrument;
+  return {
+    ...toReportRecord(report),
+    manufacturer: instrument.manufacturer.name,
+    instrumentModel: instrument.model,
+    instrumentType: instrument.instrumentType,
+    accuracyClass: instrument.accuracyClass,
+    complianceOutcome: repositoryOutcome(report),
+  };
+}
+
+export async function listReports(filters: string | ReportListFilters = {}): Promise<ReportRepositoryRecord[]> {
   try {
+    const options = typeof filters === 'string' ? { testSessionId: filters } : filters;
+    const state = options.state ?? 'ACTIVE';
+    const query = options.query?.trim();
     const args: Prisma.ReportFindManyArgs = {
-      where: { ...(testSessionId ? { sessionId: testSessionId } : {}), revokedAt: null },
+      where: {
+        ...(options.testSessionId ? { sessionId: options.testSessionId } : {}),
+        ...(state === 'ACTIVE' ? { revokedAt: null } : state === 'REVOKED' ? { revokedAt: { not: null } } : {}),
+        ...(query ? {
+          OR: [
+            { referenceNumber: { contains: query, mode: 'insensitive' } },
+            { session: { instrument: { model: { contains: query, mode: 'insensitive' } } } },
+            { session: { instrument: { manufacturer: { name: { contains: query, mode: 'insensitive' } } } } },
+          ],
+        } : {}),
+      },
+      include: reportRepositoryInclude,
       orderBy: [{ issuedAt: 'desc' }, { version: 'desc' }],
     };
-    const reports = await prisma.report.findMany(args);
-    return reports.map(toReportRecord);
+    const reports = await prisma.report.findMany(args) as RepositoryReport[];
+    return reports.map(toRepositoryRecord);
   } catch (error) { throwMappedDatabaseError(error, 'Report'); }
 }
 

@@ -5,6 +5,7 @@ import {
 } from '@/lib/db/errors';
 import { getTestResultById, updateTestResult } from '@/lib/services/test-result.service';
 import { validateTestResultUpdate } from '@/lib/validation/test-result';
+import { forbiddenOwnership, requireApiUser, technicianOwnsResult } from '@/lib/auth/api-access';
 
 interface TestResultRouteContext {
   params: Promise<{ id: string }>;
@@ -41,8 +42,11 @@ export async function GET(_request: Request, context: TestResultRouteContext): P
 }
 
 export async function PATCH(request: Request, context: TestResultRouteContext): Promise<Response> {
+  const access = await requireApiUser(['LAB_TECHNICIAN', 'ADMIN']);
+  if (!access.authorized) return access.response;
   const id = await routeId(context);
   if (!id) return Response.json({ error: 'Invalid test result ID' }, { status: 400 });
+  if (!await technicianOwnsResult(access.user, id)) return forbiddenOwnership();
 
   let body: unknown;
   try {

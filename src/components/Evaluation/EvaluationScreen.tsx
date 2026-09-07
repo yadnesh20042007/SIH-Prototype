@@ -72,15 +72,6 @@ interface SavedTestSessionResponse {
     | 'REJECTED'
     | 'CANCELLED';
   rulesetVersionId: string;
-  technicianId: string;
-}
-
-interface DevelopmentWorkflowContext {
-  technician: {
-    id: string;
-    name: string;
-    role: 'LAB_TECHNICIAN';
-  };
 }
 
 interface SavedTestObservationResponse {
@@ -225,7 +216,6 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
   } | null>(null);
   const [resultIntegrityError, setResultIntegrityError] = useState<string | null>(null);
   const [resultsStale, setResultsStale] = useState(false);
-  const [developmentContext, setDevelopmentContext] = useState<DevelopmentWorkflowContext | null>(null);
   const [submittingReview, setSubmittingReview] = useState(false);
   const [workflowMessage, setWorkflowMessage] = useState<{
     tone: 'error' | 'success';
@@ -244,7 +234,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           throw new Error('A valid test session is required to open the evaluation workspace.');
         }
 
-        const [instrumentResponse, sessionResponse, observationsResponse, resultsResponse, contextResponse] = await Promise.all([
+        const [instrumentResponse, sessionResponse, observationsResponse, resultsResponse] = await Promise.all([
           fetch(`/api/instruments/${encodeURIComponent(instrumentId)}`, {
             signal: controller.signal,
           }),
@@ -257,9 +247,6 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           fetch(`/api/test-results?testSessionId=${encodeURIComponent(sessionId)}`, {
             signal: controller.signal,
           }),
-          fetch('/api/test-sessions/development-context', {
-            signal: controller.signal,
-          }),
         ]);
         const data = (await instrumentResponse.json()) as SavedInstrumentResponse & {
           error?: string;
@@ -269,7 +256,6 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
         };
         const observationsData = await observationsResponse.json();
         const resultsData = await resultsResponse.json();
-        const contextData = await contextResponse.json();
         if (!instrumentResponse.ok) {
           throw new Error(
             typeof data.error === 'string'
@@ -289,9 +275,6 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
         }
         if (!resultsResponse.ok) {
           throw new Error(observationError(resultsData, resultsResponse.status));
-        }
-        if (!contextResponse.ok) {
-          throw new Error(observationError(contextData, contextResponse.status));
         }
         if (sessionData.instrumentId !== instrumentId) {
           throw new Error('This test session does not belong to the selected instrument.');
@@ -316,7 +299,6 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           hasFineDisplayDevice: data.hasFineDisplayDevice,
         });
         setSession(sessionData);
-        setDevelopmentContext(contextData as DevelopmentWorkflowContext);
         setVerificationContext(
           VERIFICATION_CONTEXT_BY_SESSION[sessionData.verificationContext]
         );
@@ -788,19 +770,15 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
   }
 
   async function submitForReview(): Promise<void> {
-    if (!session || !developmentContext) return;
+    if (!session) return;
     setSubmittingReview(true);
     setWorkflowMessage(null);
     try {
-      if (session.technicianId !== developmentContext.technician.id) {
-        throw new Error('The seeded development technician is not assigned to this session.');
-      }
       const response = await fetch('/api/approvals', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sessionId: session.id,
-          userId: developmentContext.technician.id,
           action: 'SUBMIT_FOR_REVIEW',
         }),
       });
@@ -833,8 +811,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
     session?.status === 'IN_PROGRESS' &&
     savedResults.length === 3 &&
     !resultsStale &&
-    !resultIntegrityError &&
-    developmentContext?.technician.id === session.technicianId
+    !resultIntegrityError
   );
 
   if (instrumentLoading) {

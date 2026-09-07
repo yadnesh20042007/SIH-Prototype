@@ -2,16 +2,18 @@ import type { Metadata } from 'next';
 
 import { AppHeader } from '@/components/AppHeader';
 import { RegistryScreen } from '@/components/Registry/RegistryScreen';
+import { requirePageUser } from '@/lib/auth/page-access';
 
 export const metadata: Metadata = {
   title: 'Instrument Registry',
   description: 'Register and select non-automatic weighing instruments for OIML R76 evaluation.',
 };
 
-export default function RegistryPage() {
+export default async function RegistryPage() {
+  const user = await requirePageUser(['LAB_TECHNICIAN', 'ADMIN']);
   return (
     <main id="main-content" className="min-h-screen bg-[#F7F9FB]">
-      <AppHeader section="Instrument Registry" />
+      <AppHeader section="Instrument Registry" user={user} />
       <div className="mx-auto max-w-[1500px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
         <div className="mb-6 border-l-[3px] border-[#0A66C2] pl-4">
           <p className="m-0 text-[0.66rem] font-bold uppercase tracking-[0.14em] text-[#0A66C2]">Registry</p>

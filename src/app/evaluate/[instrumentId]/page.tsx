@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 
 import { AppHeader } from '@/components/AppHeader';
 import { EvaluationScreen } from '@/components/Evaluation/EvaluationScreen';
+import { requirePageUser } from '@/lib/auth/page-access';
 
 export const metadata: Metadata = {
   title: 'Laboratory Evaluation',
@@ -14,13 +15,14 @@ interface EvaluationPageProps {
 }
 
 export default async function EvaluationPage({ params, searchParams }: EvaluationPageProps) {
+  const user = await requirePageUser(['LAB_TECHNICIAN', 'ADMIN']);
   const { instrumentId } = await params;
   const { sessionId: rawSessionId } = await searchParams;
   const sessionId = typeof rawSessionId === 'string' ? rawSessionId.trim() : '';
 
   return (
     <main id="main-content" className="min-h-screen bg-[#F7F9FB]">
-      <AppHeader backHref="/" section="Evaluation Workspace" />
+      <AppHeader backHref="/" section="Evaluation Workspace" user={user} />
       <div className="mx-auto max-w-[1500px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
         <div className="mb-6 border-l-[3px] border-[#0A66C2] pl-4">
           <p className="m-0 text-[0.66rem] font-bold uppercase tracking-[0.14em] text-[#0A66C2]">Evaluation workspace</p>

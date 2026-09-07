@@ -39,21 +39,6 @@ export interface DevelopmentTestSessionContext {
     standard: string;
     version: string;
   };
-  technician: {
-    id: string;
-    name: string;
-    role: 'LAB_TECHNICIAN';
-  };
-  reviewer: {
-    id: string;
-    name: string;
-    role: 'REVIEWING_OFFICER';
-  };
-  approver: {
-    id: string;
-    name: string;
-    role: 'APPROVING_OFFICER';
-  };
 }
 
 const PROTOTYPE_RULESET = {
@@ -61,9 +46,6 @@ const PROTOTYPE_RULESET = {
   version: '2006',
 } as const;
 
-const DEVELOPMENT_TECHNICIAN_EMAIL = 'dev.lab.technician@nawi-r76.local';
-const DEVELOPMENT_REVIEWER_EMAIL = 'dev.reviewing.officer@nawi-r76.local';
-const DEVELOPMENT_APPROVER_EMAIL = 'dev.approving.officer@nawi-r76.local';
 
 function toIsoString(value: Date): string {
   return value.toISOString();
@@ -97,77 +79,21 @@ export async function createTestSession(
   }
 }
 
-/** Resolves the seeded pre-authentication identities used to start a development session. */
+/** Resolves only the active prototype ruleset needed to start a session. */
 export async function getDevelopmentTestSessionContext(): Promise<DevelopmentTestSessionContext> {
   try {
-    const [rulesetVersion, technician, reviewer, approver] = await Promise.all([
-      prisma.rulesetVersion.findFirst({
+    const rulesetVersion = await prisma.rulesetVersion.findFirst({
         where: {
           ...PROTOTYPE_RULESET,
           isActive: true,
         },
         select: { id: true, standard: true, version: true },
-      }),
-      prisma.user.findFirst({
-        where: {
-          email: DEVELOPMENT_TECHNICIAN_EMAIL,
-          role: 'LAB_TECHNICIAN',
-          active: true,
-          deletedAt: null,
-        },
-        select: { id: true, name: true, role: true },
-      }),
-      prisma.user.findFirst({
-        where: {
-          email: DEVELOPMENT_REVIEWER_EMAIL,
-          role: 'REVIEWING_OFFICER',
-          active: true,
-          deletedAt: null,
-        },
-        select: { id: true, name: true, role: true },
-      }),
-      prisma.user.findFirst({
-        where: {
-          email: DEVELOPMENT_APPROVER_EMAIL,
-          role: 'APPROVING_OFFICER',
-          active: true,
-          deletedAt: null,
-        },
-        select: { id: true, name: true, role: true },
-      }),
-    ]);
+      });
 
     if (!rulesetVersion) {
       throw new DatabaseNotFoundError('Active OIML R76-1:2006 prototype ruleset not found');
     }
-    if (!technician) {
-      throw new DatabaseNotFoundError('Active development lab technician not found');
-    }
-    if (!reviewer) {
-      throw new DatabaseNotFoundError('Active development reviewing officer not found');
-    }
-    if (!approver) {
-      throw new DatabaseNotFoundError('Active development approving officer not found');
-    }
-
-    return {
-      rulesetVersion,
-      technician: {
-        id: technician.id,
-        name: technician.name,
-        role: 'LAB_TECHNICIAN',
-      },
-      reviewer: {
-        id: reviewer.id,
-        name: reviewer.name,
-        role: 'REVIEWING_OFFICER',
-      },
-      approver: {
-        id: approver.id,
-        name: approver.name,
-        role: 'APPROVING_OFFICER',
-      },
-    };
+    return { rulesetVersion };
   } catch (error) {
     throwMappedDatabaseError(error, 'TestSession');
   }

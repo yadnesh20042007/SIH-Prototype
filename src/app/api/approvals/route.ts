@@ -9,6 +9,16 @@ import {
   listApprovals,
 } from '@/lib/services/approval.service';
 import { validateApprovalCreate } from '@/lib/validation/approval';
+import { requireApiUser } from '@/lib/auth/api-access';
+
+const ACTION_ROLES = {
+  SUBMIT_FOR_REVIEW: ['LAB_TECHNICIAN', 'ADMIN'],
+  CANCEL: ['LAB_TECHNICIAN', 'ADMIN'],
+  REVIEW_APPROVE: ['REVIEWING_OFFICER', 'ADMIN'],
+  REVIEW_REJECT: ['REVIEWING_OFFICER', 'ADMIN'],
+  FINAL_APPROVE: ['APPROVING_OFFICER', 'ADMIN'],
+  FINAL_REJECT: ['APPROVING_OFFICER', 'ADMIN'],
+} as const;
 
 function serviceErrorResponse(error: unknown): Response {
   if (error instanceof ApprovalWorkflowValidationError) {
@@ -27,6 +37,10 @@ function serviceErrorResponse(error: unknown): Response {
 }
 
 export async function POST(request: Request): Promise<Response> {
+  const authentication = await requireApiUser([
+    'LAB_TECHNICIAN', 'REVIEWING_OFFICER', 'APPROVING_OFFICER', 'ADMIN',
+  ]);
+  if (!authentication.authorized) return authentication.response;
   let body: unknown;
   try {
     body = await request.json();
@@ -42,8 +56,15 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
+  if (!ACTION_ROLES[validation.data.action].some((role) => role === authentication.user.role)) {
+    return Response.json({ error: 'Insufficient permissions for this workflow action' }, { status: 403 });
+  }
+
   try {
-    return Response.json(await createApproval(validation.data), { status: 201 });
+    return Response.json(
+      await createApproval(validation.data, authentication.user.id),
+      { status: 201 },
+    );
   } catch (error) {
     return serviceErrorResponse(error);
   }

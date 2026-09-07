@@ -17,21 +17,6 @@ const context = {
     standard: 'OIML R76-1',
     version: '2006',
   },
-  technician: {
-    id: 'technician-real-id',
-    name: 'Development Lab Technician',
-    role: 'LAB_TECHNICIAN',
-  },
-  reviewer: {
-    id: 'reviewer-real-id',
-    name: 'Development Reviewing Officer',
-    role: 'REVIEWING_OFFICER',
-  },
-  approver: {
-    id: 'approver-real-id',
-    name: 'Development Approving Officer',
-    role: 'APPROVING_OFFICER',
-  },
 };
 
 describe('Development TestSession context route unit tests (mocked service)', () => {
@@ -50,14 +35,14 @@ describe('Development TestSession context route unit tests (mocked service)', ()
 
   it('returns 404 when required bootstrap data is unavailable', async () => {
     serviceMock.getDevelopmentTestSessionContext.mockRejectedValue(
-      new DatabaseNotFoundError('Active development lab technician not found')
+      new DatabaseNotFoundError('Active OIML R76-1:2006 prototype ruleset not found')
     );
 
     const response = await GET();
 
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({
-      error: 'Active development lab technician not found',
+      error: 'Active OIML R76-1:2006 prototype ruleset not found',
     });
   });
 

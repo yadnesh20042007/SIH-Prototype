@@ -8,6 +8,7 @@ import {
   listTestObservations,
 } from '@/lib/services/test-observation.service';
 import { validateTestObservationCreate } from '@/lib/validation/test-observation';
+import { forbiddenOwnership, requireApiUser, technicianOwnsSession } from '@/lib/auth/api-access';
 
 function serviceErrorResponse(error: unknown): Response {
   if (error instanceof DatabaseNotFoundError) {
@@ -23,6 +24,8 @@ function serviceErrorResponse(error: unknown): Response {
 }
 
 export async function POST(request: Request): Promise<Response> {
+  const access = await requireApiUser(['LAB_TECHNICIAN', 'ADMIN']);
+  if (!access.authorized) return access.response;
   let body: unknown;
   try {
     body = await request.json();
@@ -37,6 +40,7 @@ export async function POST(request: Request): Promise<Response> {
       { status: 400 }
     );
   }
+  if (!await technicianOwnsSession(access.user, validation.data.sessionId)) return forbiddenOwnership();
 
   try {
     return Response.json(await createTestObservation(validation.data), { status: 201 });

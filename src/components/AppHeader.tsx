@@ -1,4 +1,8 @@
 import Link from 'next/link';
+import type { Role } from '@prisma/client';
+
+import { LogoutButton } from '@/components/Auth/LogoutButton';
+import { friendlyRoleName } from '@/lib/auth/roles';
 
 function LaboratoryMark() {
   return (
@@ -12,9 +16,10 @@ function LaboratoryMark() {
 interface AppHeaderProps {
   backHref?: string;
   section: string;
+  user: { name: string; role: Role };
 }
 
-export function AppHeader({ backHref, section }: AppHeaderProps) {
+export function AppHeader({ backHref, section, user }: AppHeaderProps) {
   const brand = (
     <div className="flex min-w-0 items-center gap-3.5">
       <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-[#0A66C2] text-white">
@@ -41,9 +46,11 @@ export function AppHeader({ backHref, section }: AppHeaderProps) {
         ) : brand}
         <div className="flex shrink-0 items-center gap-4 border-l border-[#D9E2EC] pl-4">
           <nav aria-label="Primary" className="flex items-center gap-0.5 sm:gap-1">
-            <Link href="/" className="rounded px-2.5 py-1.5 text-[0.7rem] font-semibold text-[#475467] no-underline hover:bg-[#F0F5FA] hover:text-[#0A66C2]">Registry</Link>
-            <Link href="/review" className="rounded px-2.5 py-1.5 text-[0.7rem] font-semibold text-[#475467] no-underline hover:bg-[#F0F5FA] hover:text-[#0A66C2]">Review</Link>
-            <Link href="/approval" className="rounded px-2.5 py-1.5 text-[0.7rem] font-semibold text-[#475467] no-underline hover:bg-[#F0F5FA] hover:text-[#0A66C2]">Final Approval</Link>
+            {(user.role === 'LAB_TECHNICIAN' || user.role === 'ADMIN') && <Link href="/" className="rounded px-2.5 py-1.5 text-[0.7rem] font-semibold text-[#475467] no-underline hover:bg-[#F0F5FA] hover:text-[#0A66C2]">Registry</Link>}
+            {(user.role === 'REVIEWING_OFFICER' || user.role === 'ADMIN') && <Link href="/review" className="rounded px-2.5 py-1.5 text-[0.7rem] font-semibold text-[#475467] no-underline hover:bg-[#F0F5FA] hover:text-[#0A66C2]">Review</Link>}
+            {(user.role === 'APPROVING_OFFICER' || user.role === 'ADMIN') && <Link href="/approval" className="rounded px-2.5 py-1.5 text-[0.7rem] font-semibold text-[#475467] no-underline hover:bg-[#F0F5FA] hover:text-[#0A66C2]">Final Approval</Link>}
+            <Link href="/reports" className="rounded px-2.5 py-1.5 text-[0.7rem] font-semibold text-[#475467] no-underline hover:bg-[#F0F5FA] hover:text-[#0A66C2]">Reports</Link>
+            {user.role === 'ADMIN' && <Link href="/admin/users" className="rounded px-2.5 py-1.5 text-[0.7rem] font-semibold text-[#475467] no-underline hover:bg-[#F0F5FA] hover:text-[#0A66C2]">Admin</Link>}
           </nav>
           <div className="hidden text-right xl:block">
             <p className="m-0 text-[0.62rem] font-bold uppercase tracking-[0.12em] text-[#667085]">
@@ -53,6 +60,11 @@ export function AppHeader({ backHref, section }: AppHeaderProps) {
               OIML R76-1 (2006)
             </p>
           </div>
+          <div className="hidden min-w-0 border-l border-[#D9E2EC] pl-4 text-right sm:block">
+            <p className="m-0 max-w-40 truncate text-[0.72rem] font-semibold text-[#1D2226]">{user.name}</p>
+            <p className="m-0 mt-0.5 text-[0.62rem] text-[#667085]">{friendlyRoleName(user.role)}</p>
+          </div>
+          <LogoutButton />
         </div>
       </div>
     </header>

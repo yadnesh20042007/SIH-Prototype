@@ -15,7 +15,7 @@ vi.mock('node:fs/promises', () => fsMock);
 import { instrumentConfigFingerprint } from '@/lib/db/observation-fingerprint';
 import { DatabaseNotFoundError } from '@/lib/db/errors';
 import { logicalObservationFingerprint } from './result-freshness.service';
-import { generateApprovedSessionReport, readReportPdf, ReportEligibilityError } from './report.service';
+import { generateApprovedSessionReport, listReports, readReportPdf, ReportEligibilityError } from './report.service';
 
 const originalAppUrl = process.env.NEXT_PUBLIC_APP_URL;
 
@@ -178,6 +178,39 @@ describe('Report service unit tests (mocked Prisma and filesystem)', () => {
     });
     await expect(readReportPdf('report-1')).rejects.toBeInstanceOf(DatabaseNotFoundError);
     expect(renderMock).not.toHaveBeenCalled();
+  });
+
+  it('lists repository metadata and persisted overall outcome', async () => {
+    reportMock.findMany.mockResolvedValue([{ ...report, session: session() }]);
+    const result = await listReports({ state: 'ALL' });
+    expect(result[0]).toMatchObject({
+      referenceNumber: report.referenceNumber, manufacturer: 'Metrology Works',
+      instrumentModel: 'Model A', instrumentType: 'SINGLE_RANGE', accuracyClass: 'III',
+      complianceOutcome: 'PASS', revokedAt: null,
+    });
+    expect(result[0]).not.toHaveProperty('qrVerificationId');
+  });
+
+  it('builds database search across reference, manufacturer, and model', async () => {
+    reportMock.findMany.mockResolvedValue([]);
+    await listReports({ query: 'Model A', state: 'ALL' });
+    expect(reportMock.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ OR: [
+        { referenceNumber: { contains: 'Model A', mode: 'insensitive' } },
+        { session: { instrument: { model: { contains: 'Model A', mode: 'insensitive' } } } },
+        { session: { instrument: { manufacturer: { name: { contains: 'Model A', mode: 'insensitive' } } } } },
+      ] }),
+    }));
+  });
+
+  it('applies active and revoked state filtering without changing report data', async () => {
+    reportMock.findMany.mockResolvedValue([]);
+    await listReports({ state: 'ACTIVE' });
+    expect(reportMock.findMany.mock.calls[0][0].where).toMatchObject({ revokedAt: null });
+    await listReports({ state: 'REVOKED' });
+    expect(reportMock.findMany.mock.calls[1][0].where).toMatchObject({ revokedAt: { not: null } });
+    await listReports({ state: 'ALL' });
+    expect(reportMock.findMany.mock.calls[2][0].where).not.toHaveProperty('revokedAt');
   });
 
   it('logs an in-memory renderer failure before returning a safe mapped error', async () => {

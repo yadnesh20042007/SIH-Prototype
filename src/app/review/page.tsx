@@ -2,13 +2,15 @@ import type { Metadata } from 'next';
 
 import { AppHeader } from '@/components/AppHeader';
 import { ApprovalQueueScreen } from '@/components/Approval/ApprovalQueueScreen';
+import { requirePageUser } from '@/lib/auth/page-access';
 
 export const metadata: Metadata = { title: 'Session Review' };
 
-export default function ReviewPage() {
+export default async function ReviewPage() {
+  const user = await requirePageUser(['REVIEWING_OFFICER', 'ADMIN']);
   return (
     <main className="min-h-screen bg-[#F7F9FB]">
-      <AppHeader section="Technical Review" />
+      <AppHeader section="Technical Review" user={user} />
       <div className="mx-auto max-w-[1500px] px-4 py-6 sm:px-6 lg:px-8">
         <div className="mb-6 border-l-[3px] border-[#0A66C2] pl-4">
           <p className="m-0 text-[0.66rem] font-bold uppercase tracking-[0.14em] text-[#0A66C2]">Review</p>
