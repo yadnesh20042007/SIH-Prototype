@@ -5,6 +5,7 @@ import { VerificationContext } from '../../../../lib/r76/types/verification';
 import { evaluateSavedSession } from '@/lib/services/session-evaluation.service';
 import { DatabaseConflictError, DatabaseNotFoundError } from '@/lib/db/errors';
 import { forbiddenOwnership, requireApiUser, technicianOwnsSession } from '@/lib/auth/api-access';
+import { MPEValidationError } from '@/lib/r76/calculations/mpe';
 
 export async function POST(req: Request) {
   const access = await requireApiUser(['LAB_TECHNICIAN', 'ADMIN']);
@@ -53,6 +54,9 @@ export async function POST(req: Request) {
     }
     if (error instanceof DatabaseConflictError) {
       return NextResponse.json({ error: error.message }, { status: 409 });
+    }
+    if (error instanceof MPEValidationError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
     }
     console.error('Error evaluating R76 compliance:', error);
     return NextResponse.json({ error: 'Internal server error during evaluation' }, { status: 500 });

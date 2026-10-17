@@ -13,12 +13,14 @@ type SessionStatus =
   | 'PENDING_APPROVAL'
   | 'APPROVED'
   | 'REJECTED'
-  | 'CANCELLED';
+  | 'CANCELLED'
+  | 'RETURNED';
 
 interface TestSessionRecord {
   id: string;
   instrumentId: string;
   verificationContext:
+    | 'TYPE_EVALUATION'
     | 'INITIAL_VERIFICATION'
     | 'SUBSEQUENT_VERIFICATION'
     | 'SERVICE_INSPECTION';
@@ -39,7 +41,7 @@ interface ApiErrorPayload {
   errors?: Array<{ field?: unknown; message?: unknown }>;
 }
 
-const RESUMABLE_STATUSES = new Set<SessionStatus>(['DRAFT', 'IN_PROGRESS']);
+const RESUMABLE_STATUSES = new Set<SessionStatus>(['DRAFT', 'IN_PROGRESS', 'RETURNED']);
 const PENDING_STATUSES = new Set<SessionStatus>(['PENDING_REVIEW', 'PENDING_APPROVAL']);
 
 function sessionUrl(instrumentId: string, sessionId: string): string {
@@ -103,8 +105,29 @@ async function fetchSessionStartData(
   };
 }
 
-export function InstrumentSessionActions({ instrumentId }: { instrumentId: string }) {
+interface InstrumentSessionActionsProps {
+  instrumentId: string;
+  isAdmin?: boolean;
+}
+
+export function InstrumentSessionActions({ instrumentId, isAdmin: propIsAdmin }: InstrumentSessionActionsProps) {
   const router = useRouter();
+  const [isAdminState, setIsAdminState] = useState<boolean | undefined>(propIsAdmin);
+
+  useEffect(() => {
+    if (propIsAdmin !== undefined) {
+      setIsAdminState(propIsAdmin);
+      return;
+    }
+    fetch('/api/auth/session')
+      .then((res) => res.json())
+      .then((data) => {
+        setIsAdminState(data.authenticated && data.user?.role === 'ADMIN');
+      })
+      .catch(() => setIsAdminState(false));
+  }, [propIsAdmin]);
+
+  const isAdmin = propIsAdmin ?? isAdminState ?? false;
   const [sessions, setSessions] = useState<TestSessionRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -115,6 +138,30 @@ export function InstrumentSessionActions({ instrumentId }: { instrumentId: strin
   const [form, setForm] = useState({
     verificationContext: 'INITIAL_VERIFICATION',
   });
+  const [deletingSession, setDeletingSession] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function deleteSession(sessionId: string) {
+    if (!confirm('Are you sure you want to delete this session? This will permanently delete its observations, test results, and associated session-specific records. This action cannot be undone.')) return;
+    setDeletingSession(sessionId);
+    setDeleteError(null);
+    try {
+      const response = await fetch(`/api/test-sessions/${sessionId}`, { method: 'DELETE' });
+      if (!response.ok) {
+        let msg = `Failed to delete session (Status ${response.status})`;
+        try {
+          const payload = await response.json();
+          msg = payload.error || msg;
+        } catch {}
+        throw new Error(msg);
+      }
+      await loadSessionStartData();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Unable to delete session.');
+    } finally {
+      setDeletingSession(null);
+    }
+  }
 
   const loadSessionStartData = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -191,7 +238,7 @@ export function InstrumentSessionActions({ instrumentId }: { instrumentId: strin
   const resumable = sessions.filter(({ status }) => RESUMABLE_STATUSES.has(status));
   const pending = sessions.filter(({ status }) => PENDING_STATUSES.has(status));
   const approved = sessions.filter(({ status }) => status === 'APPROVED');
-  const closedCount = sessions.length - resumable.length - pending.length - approved.length;
+  const closed = sessions.filter(({ status }) => status === 'REJECTED' || status === 'CANCELLED');
 
   return (
     <div className="ml-auto flex min-w-[210px] max-w-[280px] flex-col items-end gap-2">
@@ -209,25 +256,55 @@ export function InstrumentSessionActions({ instrumentId }: { instrumentId: strin
           </button>
         </div>
       )}
+      
+      {deleteError && (
+        <div className="flex flex-col items-end gap-1">
+          <span role="alert" className="text-right text-[0.66rem] leading-snug text-[#B42318]">
+            {deleteError}
+          </span>
+        </div>
+      )}
 
       {resumable.map((session) => (
-        <Link
-          key={session.id}
-          href={sessionUrl(instrumentId, session.id)}
-          className="inline-flex items-center gap-2 rounded-[5px] border border-[#A9C9E8] bg-[#F6FAFE] px-3 py-1.5 text-[0.68rem] font-bold text-[#0A66C2] no-underline hover:border-[#0A66C2] hover:bg-[#EAF3FC]"
-        >
-          Resume Test Session
-          <span className="font-medium text-[#667085]">{displayStatus(session.status)}</span>
-        </Link>
+        <div key={session.id} className="flex gap-1 items-center">
+          <Link
+            href={sessionUrl(instrumentId, session.id)}
+            className="inline-flex items-center gap-2 rounded-[5px] border border-[#A9C9E8] bg-[#F6FAFE] px-3 py-1.5 text-[0.68rem] font-bold text-[#0A66C2] no-underline hover:border-[#0A66C2] hover:bg-[#EAF3FC]"
+          >
+            Resume Test Session
+            <span className="font-medium text-[#667085]">{displayStatus(session.status)}</span>
+          </Link>
+          {isAdmin && (
+            <button 
+              type="button" 
+              onClick={() => deleteSession(session.id)}
+              disabled={deletingSession === session.id}
+              className="rounded-[5px] border border-[#F3C7C7] bg-[#FEF3F2] px-2 py-1 text-[0.6rem] font-bold text-[#B42318] hover:bg-[#FCE8E8] disabled:opacity-50"
+            >
+              {deletingSession === session.id ? '...' : 'Del'}
+            </button>
+          )}
+        </div>
       ))}
 
       {pending.map((session) => (
-        <span
-          key={session.id}
-          className="rounded-[5px] border border-[#D9E2EC] bg-[#F8FAFC] px-2.5 py-1.5 text-[0.65rem] font-semibold text-[#667085]"
-        >
-          Session {displayStatus(session.status)}
-        </span>
+        <div key={session.id} className="flex gap-1 items-center">
+          <span
+            className="rounded-[5px] border border-[#D9E2EC] bg-[#F8FAFC] px-2.5 py-1.5 text-[0.65rem] font-semibold text-[#667085]"
+          >
+            Session {displayStatus(session.status)}
+          </span>
+          {isAdmin && session.status === 'PENDING_REVIEW' && (
+            <button 
+              type="button" 
+              onClick={() => deleteSession(session.id)}
+              disabled={deletingSession === session.id}
+              className="rounded-[5px] border border-[#F3C7C7] bg-[#FEF3F2] px-2 py-1 text-[0.6rem] font-bold text-[#B42318] hover:bg-[#FCE8E8] disabled:opacity-50"
+            >
+              {deletingSession === session.id ? '...' : 'Del'}
+            </button>
+          )}
+        </div>
       ))}
 
       {approved.map((session) => (
@@ -240,11 +317,27 @@ export function InstrumentSessionActions({ instrumentId }: { instrumentId: strin
         </Link>
       ))}
 
-      {closedCount > 0 && (
+      {isAdmin ? (
+        closed.map((session) => (
+          <div key={session.id} className="flex gap-1 items-center">
+            <span className="rounded-[5px] border border-[#E4EAF0] bg-[#F8FAFC] px-2 py-1 text-[0.62rem] text-[#7B8794]">
+              Session {displayStatus(session.status)}
+            </span>
+            <button 
+              type="button" 
+              onClick={() => deleteSession(session.id)}
+              disabled={deletingSession === session.id}
+              className="rounded-[5px] border border-[#F3C7C7] bg-[#FEF3F2] px-2 py-1 text-[0.6rem] font-bold text-[#B42318] hover:bg-[#FCE8E8] disabled:opacity-50"
+            >
+              {deletingSession === session.id ? '...' : 'Del'}
+            </button>
+          </div>
+        ))
+      ) : closed.length > 0 ? (
         <span className="text-[0.63rem] text-[#7B8794]">
-          {closedCount} closed session{closedCount === 1 ? '' : 's'}
+          {closed.length} closed session{closed.length === 1 ? '' : 's'}
         </span>
-      )}
+      ) : null}
 
       {!error && resumable.length === 0 && pending.length === 0 && !setupOpen && (
         <button
@@ -268,6 +361,7 @@ export function InstrumentSessionActions({ instrumentId }: { instrumentId: strin
             }
             disabled={creating}
             options={[
+              { value: 'TYPE_EVALUATION', label: 'Type evaluation' },
               { value: 'INITIAL_VERIFICATION', label: 'Initial verification' },
               { value: 'SUBSEQUENT_VERIFICATION', label: 'Subsequent verification' },
               { value: 'SERVICE_INSPECTION', label: 'Service inspection' },

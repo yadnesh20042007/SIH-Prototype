@@ -12,13 +12,14 @@ const { serviceMock } = vi.hoisted(() => ({
   serviceMock: {
     getInstrumentById: vi.fn(),
     updateInstrument: vi.fn(),
+    deleteInstrument: vi.fn(),
   },
 }));
 
 vi.mock('@/lib/services/instrument.service', () => serviceMock);
 
 import { DatabaseConflictError, DatabaseNotFoundError } from '@/lib/db/errors';
-import { GET, PATCH } from './route';
+import { GET, PATCH, DELETE } from './route';
 
 const instrument = {
   id: 'instrument-1',
@@ -145,5 +146,51 @@ describe('Instrument item route unit tests (mocked service)', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: 'Invalid instrument ID' });
     expect(serviceMock.getInstrumentById).not.toHaveBeenCalled();
+  });
+
+  describe('DELETE', () => {
+    it('deletes an instrument when authenticated as ADMIN', async () => {
+      serviceMock.deleteInstrument.mockResolvedValue(undefined);
+
+      const response = await DELETE(
+        new Request('http://localhost/api/instruments/instrument-1', { method: 'DELETE' }),
+        context('instrument-1')
+      );
+
+      expect(response.status).toBe(204);
+      expect(serviceMock.deleteInstrument).toHaveBeenCalledWith('instrument-1', 'authenticated-user');
+    });
+
+    it('rejects deletion when user does not have ADMIN role', async () => {
+      const { requireApiUser } = await import('@/lib/auth/api-access');
+      vi.mocked(requireApiUser).mockResolvedValueOnce({
+        authorized: false,
+        response: Response.json({ error: 'Insufficient permissions' }, { status: 403 }),
+      });
+
+      const response = await DELETE(
+        new Request('http://localhost/api/instruments/instrument-1', { method: 'DELETE' }),
+        context('instrument-1')
+      );
+
+      expect(response.status).toBe(403);
+      expect(serviceMock.deleteInstrument).not.toHaveBeenCalled();
+    });
+
+    it('returns 409 conflict when deleting an instrument containing approved sessions', async () => {
+      serviceMock.deleteInstrument.mockRejectedValue(
+        new DatabaseConflictError('Cannot delete instrument containing approved or pending sessions')
+      );
+
+      const response = await DELETE(
+        new Request('http://localhost/api/instruments/instrument-1', { method: 'DELETE' }),
+        context('instrument-1')
+      );
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: 'Cannot delete instrument containing approved or pending sessions',
+      });
+    });
   });
 });

@@ -20,7 +20,8 @@ describe('Test Selection Engine (OIML R76 Applicability)', () => {
     hasInitialZeroSettingDevice: false,
     initialZeroSettingRange: 0,
     hasFineDisplayDevice: false,
-    instrumentType: InstrumentType.SingleRange
+    instrumentType: InstrumentType.SingleRange,
+    zeroSettingMechanisms: ['automatic' as any],
   };
 
   const context = VerificationContext.InitialVerification;
@@ -28,7 +29,7 @@ describe('Test Selection Engine (OIML R76 Applicability)', () => {
   it('selects all currently applicable supported tests for a standard Class III single-range instrument', () => {
     const results = selectTests(baseStandardInst, context);
     
-    expect(results).toHaveLength(3);
+    expect(results).toHaveLength(5); // 5 tests in the engine
     
     const weighing = results.find(r => r.testType === TestType.WeighingPerformance);
     expect(weighing?.isApplicable).toBe(true);
@@ -73,7 +74,7 @@ describe('Test Selection Engine (OIML R76 Applicability)', () => {
     const unsupportedInst = { ...baseStandardInst, instrumentType: 'multi_interval' as InstrumentType };
     const results = selectTests(unsupportedInst, context);
     
-    expect(results).toHaveLength(3);
+    expect(results).toHaveLength(5);
     results.forEach(res => {
       expect(res.isApplicable).toBe(false);
       expect(res.reason).toContain('Unsupported');
@@ -95,5 +96,89 @@ describe('Test Selection Engine (OIML R76 Applicability)', () => {
     const run2 = selectTests(baseStandardInst, context);
     
     expect(run1).toEqual(run2);
+  });
+
+  describe('Discrimination Test Applicability', () => {
+    const digitalInst = { ...baseStandardInst, indicationType: 'digital' as any, d: 0.000005 };
+
+    it('is applicable when conditions are met (digital, d >= 5mg, Type Evaluation)', () => {
+      const results = selectTests(digitalInst, VerificationContext.TypeEvaluation);
+      const disc = results.find(r => r.testType === TestType.Discrimination);
+      
+      expect(disc?.isApplicable).toBe(true);
+      expect(disc?.r76Reference).toContain('3.8.2.2');
+    });
+
+    it('is not applicable if d < 5mg', () => {
+      const smallDInst = { ...digitalInst, d: 0.000004 }; // 4 mg
+      const results = selectTests(smallDInst, VerificationContext.TypeEvaluation);
+      const disc = results.find(r => r.testType === TestType.Discrimination);
+      
+      expect(disc?.isApplicable).toBe(false);
+      expect(disc?.reason).toContain('d >= 5 mg');
+    });
+
+    it('is not applicable if not type evaluation', () => {
+      const results = selectTests(digitalInst, VerificationContext.InitialVerification);
+      const disc = results.find(r => r.testType === TestType.Discrimination);
+      
+      expect(disc?.isApplicable).toBe(false);
+      expect(disc?.reason).toContain('type examination only');
+    });
+
+    it('is not applicable if indication is not digital', () => {
+      const analogInst = { ...digitalInst, indicationType: 'analog' as any };
+      const results = selectTests(analogInst, VerificationContext.TypeEvaluation);
+      const disc = results.find(r => r.testType === TestType.Discrimination);
+      
+      expect(disc?.isApplicable).toBe(false);
+      expect(disc?.reason).toContain('digital indication');
+    });
+  });
+
+  describe('Zero-Setting Accuracy Test Applicability', () => {
+    it('is applicable when instrument has zero-setting mechanisms', () => {
+      const instWithZero = {
+        ...baseStandardInst,
+        zeroSettingMechanisms: ['non_automatic'] as any,
+      };
+      const results = selectTests(instWithZero, context);
+      const zero = results.find((r) => r.testType === TestType.ZeroSettingAccuracy);
+      expect(zero?.isApplicable).toBe(true);
+      expect(zero?.r76Reference).toContain('4.5.2');
+    });
+
+    it('is not applicable when instrument explicitly has no zero-setting mechanisms (genuinely not fitted)', () => {
+      const results = selectTests(
+        { ...baseStandardInst, hasAutoZeroOrTracking: false, zeroSettingMechanisms: [] },
+        context
+      );
+      const zero = results.find((r) => r.testType === TestType.ZeroSettingAccuracy);
+      expect(zero?.isApplicable).toBe(false);
+      expect(zero?.reason).toContain('No zero-setting mechanism is fitted');
+    });
+
+    it('requires review when zero-setting mechanism metadata is missing/unrecorded (undefined)', () => {
+      const missingMetadataInst = { ...baseStandardInst, zeroSettingMechanisms: undefined };
+      const results = selectTests(missingMetadataInst, context);
+      const zero = results.find((r) => r.testType === TestType.ZeroSettingAccuracy);
+      expect(zero?.isApplicable).toBe(false);
+      expect(zero?.reason).toContain('Unsupported');
+      expect(zero?.reason).toContain('missing or unrecorded');
+    });
+
+    it('flags contradictory configuration for manual review when zero-setting flags are true but mechanisms is empty', () => {
+      const contradictoryInst = {
+        ...baseStandardInst,
+        hasAutoZeroOrTracking: true,
+        zeroSettingMechanisms: [],
+      };
+      const results = selectTests(contradictoryInst, context);
+      const zero = results.find((r) => r.testType === TestType.ZeroSettingAccuracy);
+      expect(zero?.isApplicable).toBe(false);
+      expect(zero?.reason).toContain('Unsupported');
+      expect(zero?.reason).toContain('Contradictory configuration');
+      expect(zero?.reason).toContain('Manual review');
+    });
   });
 });

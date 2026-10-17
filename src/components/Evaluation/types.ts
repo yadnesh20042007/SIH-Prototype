@@ -8,8 +8,20 @@
  * the POST to /api/r76/evaluate. No regulatory logic lives here.
  */
 
-import { AccuracyClass } from '@/lib/r76/types';
+import {
+  AccuracyClass,
+  VerificationContext,
+  normalizeVerificationContext,
+  isTypeEvaluationContext,
+  getVerificationContextLabel,
+} from '@/lib/r76/types';
 import type { LoadingDirection } from '@/lib/r76/types';
+
+export {
+  normalizeVerificationContext,
+  isTypeEvaluationContext,
+  getVerificationContextLabel,
+};
 
 // ─── Instrument form state ─────────────────────────────────────────
 
@@ -20,6 +32,8 @@ export interface InstrumentFormState {
   serialNumber: string;
   accuracyClass: AccuracyClass;
   instrumentType: 'SINGLE_RANGE' | 'MULTI_RANGE' | 'MULTI_INTERVAL';
+  indicationType?: 'DIGITAL' | 'ANALOG' | 'digital' | 'analog' | null;
+  zeroSettingMechanisms: string[];
   max: string;
   min: string;
   e: string;
@@ -40,6 +54,8 @@ export function createDefaultInstrument(): InstrumentFormState {
     serialNumber: '',
     accuracyClass: AccuracyClass.III,
     instrumentType: 'SINGLE_RANGE',
+    indicationType: 'DIGITAL',
+    zeroSettingMechanisms: [],
     max: '',
     min: '',
     e: '',
@@ -64,9 +80,19 @@ export interface WeighingRowState {
   loadingDirection: LoadingDirection;
 }
 
-export function createWeighingRow(id: string): WeighingRowState {
+let globalRowCounter = 0;
+
+export function generateRowId(prefix: string): string {
+  globalRowCounter += 1;
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${globalRowCounter}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function createWeighingRow(id?: string): WeighingRowState {
   return {
-    id,
+    id: id || generateRowId('w'),
     load: '',
     indicatedValue: '',
     additionalLoad: '0',
@@ -77,10 +103,17 @@ export function createWeighingRow(id: string): WeighingRowState {
 
 // ─── Repeatability form state ──────────────────────────────────────
 
+export interface RepeatabilitySeriesFormState {
+  seriesNumber: number;
+  testLoad: string;
+  indications: string[];
+}
+
 export interface RepeatabilityFormState {
   testLoad: string;
   indications: string[];
   autoZeroOrTrackingActive: boolean;
+  series?: RepeatabilitySeriesFormState[];
 }
 
 export function createDefaultRepeatability(): RepeatabilityFormState {
@@ -93,17 +126,30 @@ export function createDefaultRepeatability(): RepeatabilityFormState {
 
 /**
  * Number of repeated indication inputs shown in the UI
- * for the selected accuracy class.
- *
- * The backend still independently validates the actual requirement.
+ * for the selected accuracy class, context, and Max.
  */
-export function requiredIndicationCount(
-  accuracyClass: AccuracyClass
+export function requiredRepeatabilityWeighingsCount(
+  accuracyClass: AccuracyClass,
+  context?: VerificationContext | string,
+  max?: number
 ): number {
+  if (isTypeEvaluationContext(context)) {
+    return (max !== undefined && max >= 1000) ? 3 : 10;
+  }
   return accuracyClass === AccuracyClass.I ||
     accuracyClass === AccuracyClass.II
     ? 6
     : 3;
+}
+
+/**
+ * Number of repeated indication inputs shown in the UI
+ * for the selected accuracy class (backward-compatible signature).
+ */
+export function requiredIndicationCount(
+  accuracyClass: AccuracyClass
+): number {
+  return requiredRepeatabilityWeighingsCount(accuracyClass);
 }
 
 /** Resizes an indications array to `count`, preserving existing values. */
@@ -133,11 +179,11 @@ export interface EccentricRowState {
 }
 
 export function createEccentricRow(
-  id: string,
-  positionId: string
+  id?: string,
+  positionId = '1'
 ): EccentricRowState {
   return {
-    id,
+    id: id || generateRowId('e'),
     positionId,
     appliedLoad: '',
     indicatedValue: '',
@@ -147,23 +193,83 @@ export function createEccentricRow(
   };
 }
 
+// ─── Discrimination form state ─────────────────────────────────────
+
+export interface DiscriminationRowState {
+  id: string;
+  testLoad: string;
+  indicationBefore: string;
+  indicationAfter: string;
+}
+
+export function createDiscriminationRow(id?: string, testLoad = ''): DiscriminationRowState {
+  return {
+    id: id || generateRowId('d'),
+    testLoad,
+    indicationBefore: '',
+    indicationAfter: '',
+  };
+}
+
+// ─── Zero-Setting Accuracy form state ──────────────────────────────
+
+export interface ZeroSettingFormState {
+  load: string;
+  indicatedValue: string;
+  additionalLoad: string;
+}
+
+export function createDefaultZeroSetting(): ZeroSettingFormState {
+  return {
+    load: '',
+    indicatedValue: '',
+    additionalLoad: '',
+  };
+}
+
 // ─── Shared helpers ─────────────────────────────────────────────────
 
 /**
  * Parses a required form string into a finite number.
  * Throws instead of silently converting invalid/missing input to 0.
  */
-export function parseNum(value: string): number {
-  const trimmed = value.trim();
+export function parseNum(
+  value: string | number | undefined | null,
+  fieldName?: string
+): number {
+  if (value === undefined || value === null) {
+    throw new Error(
+      fieldName ? `${fieldName} is required.` : 'Required numeric value is missing.'
+    );
+  }
+
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      throw new Error(
+        fieldName
+          ? `${fieldName} must be a valid number: "${value}".`
+          : `Invalid numeric value: "${value}".`
+      );
+    }
+    return value;
+  }
+
+  const trimmed = String(value).trim();
 
   if (trimmed === '') {
-    throw new Error('Required numeric value is missing.');
+    throw new Error(
+      fieldName ? `${fieldName} is required.` : 'Required numeric value is missing.'
+    );
   }
 
   const n = Number(trimmed);
 
   if (!Number.isFinite(n)) {
-    throw new Error(`Invalid numeric value: "${value}"`);
+    throw new Error(
+      fieldName
+        ? `${fieldName} must be a valid number: "${value}".`
+        : `Invalid numeric value: "${value}".`
+    );
   }
 
   return n;

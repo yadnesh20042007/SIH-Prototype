@@ -51,9 +51,24 @@ enum InstrumentType {
 
 /// Mirrors VerificationContext in src/lib/r76/types/verification.ts
 enum VerificationContext {
+  TYPE_EVALUATION
   INITIAL_VERIFICATION
   SUBSEQUENT_VERIFICATION
   SERVICE_INSPECTION
+}
+
+/// Mirrors IndicationType in src/lib/r76/types/instrument.ts
+enum IndicationType {
+  DIGITAL
+  ANALOG
+}
+
+/// Zero-setting mechanisms supported by the instrument.
+enum ZeroSettingMechanism {
+  NON_AUTOMATIC
+  SEMI_AUTOMATIC
+  AUTOMATIC
+  ZERO_TRACKING
 }
 
 /// Mirrors TestType in src/lib/r76/types/test.ts
@@ -61,6 +76,8 @@ enum TestType {
   WEIGHING_PERFORMANCE
   REPEATABILITY
   ECCENTRIC_LOADING
+  DISCRIMINATION
+  ZERO_SETTING_ACCURACY
 }
 
 /// Mirrors TestOutcome in src/lib/r76/types/results.ts
@@ -74,6 +91,7 @@ enum TestOutcome {
 enum SessionStatus {
   DRAFT             // Technician is still entering observations
   IN_PROGRESS       // Observations partially recorded
+  RETURNED          // Returned for correction by a reviewer
   PENDING_REVIEW    // Submitted by technician, awaiting reviewing officer
   PENDING_APPROVAL  // Reviewed, awaiting approving officer
   APPROVED          // Fully approved — triggers report generation
@@ -86,6 +104,7 @@ enum ApprovalAction {
   SUBMIT_FOR_REVIEW // Technician submits
   REVIEW_APPROVE    // Reviewing officer passes
   REVIEW_REJECT     // Reviewing officer rejects
+  RETURN            // Reviewer or approver returns session for correction
   FINAL_APPROVE     // Approving officer grants approval
   FINAL_REJECT      // Approving officer rejects
   CANCEL            // Session cancelled
@@ -179,6 +198,8 @@ model Instrument {
   // Stored as NUMERIC (Decimal) — never Float — to preserve regulatory precision.
   accuracyClass  AccuracyClass
   instrumentType InstrumentType @default(SINGLE_RANGE)
+  indicationType IndicationType?
+  zeroSettingMechanisms ZeroSettingMechanism[] @default([])
 
   /// Maximum capacity (Max) in kg. R76-1 §3.7
   max Decimal @db.Decimal(18, 6)
@@ -231,6 +252,7 @@ model TestSession {
   instrumentId        String
   verificationContext VerificationContext
   status              SessionStatus      @default(DRAFT)
+  revisionNumber      Int                @default(1)
 
   /// Ruleset edition applied to this session — captured at creation.
   rulesetVersion   RulesetVersion @relation(fields: [rulesetVersionId], references: [id])
@@ -254,6 +276,7 @@ model TestSession {
   approvals    Approval[]
   reports      Report[]
   auditLogs    AuditLog[]        @relation("SessionAudit")
+  snapshots    TestSessionSnapshot[]
 
   @@index([instrumentId])
   @@index([technicianId])
@@ -349,6 +372,7 @@ model Approval {
   userId    String
   action    ApprovalAction
   comments  String?
+  sessionRevision Int @default(1)
   createdAt DateTime       @default(now())
 
   @@index([sessionId])
@@ -387,6 +411,22 @@ model Report {
 
   @@index([sessionId])
   @@map("reports")
+}
+
+/// Immutable snapshot of observations and results at the time of submission
+model TestSessionSnapshot {
+  id             String      @id @default(cuid())
+  session        TestSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sessionId      String
+  revisionNumber Int
+  
+  observationsData Json
+  resultsData      Json
+  
+  createdAt      DateTime    @default(now())
+
+  @@unique([sessionId, revisionNumber])
+  @@map("test_session_snapshots")
 }
 
 /// Append-only system audit log.

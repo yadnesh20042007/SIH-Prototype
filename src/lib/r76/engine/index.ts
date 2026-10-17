@@ -4,19 +4,25 @@ import { TestType } from '../types/test';
 import { 
   WeighingPerformanceObservation, 
   RepeatabilityObservation, 
-  EccentricLoadingObservation 
+  EccentricLoadingObservation,
+  DiscriminationObservationPoint
 } from '../types/observations';
 import { TestSelectionResult, selectTests } from '../test-selection/engine';
 import { evaluateWeighingPerformanceTest, WeighingPerformanceTestResult } from '../calculations/weighing';
 import { evaluateRepeatabilityTest, RepeatabilityTestResult } from '../calculations/repeatability';
-import { evaluateEccentricLoadingTest, EccentricityTestResult } from '../calculations/eccentricity';
+import { evaluateEccentricLoadingTest, EccentricityTestResult, checkEccentricCompleteness } from '../calculations/eccentricity';
+import { evaluateDiscriminationTest, DiscriminationTestResult } from '../calculations/discrimination';
+import { evaluateZeroSettingTest, ZeroSettingAccuracyTestResult } from '../calculations/zero-setting';
 import { TestOutcome } from '../types/results';
+import { ZeroSettingObservation } from '../types/observations';
 
 export interface TestObservations {
   weighingPerformance?: WeighingPerformanceObservation[];
   repeatability?: RepeatabilityObservation;
   eccentricLoading?: EccentricLoadingObservation[];
   eccentricZeroDeterminedBeforeEachLoading?: boolean;
+  discrimination?: DiscriminationObservationPoint[];
+  zeroSettingAccuracy?: ZeroSettingObservation;
 }
 
 export enum OverallOutcome {
@@ -27,12 +33,12 @@ export enum OverallOutcome {
   ManualReview = 'manual_review',
 }
 
-export type EvaluatedTestStatus = 'passed' | 'failed' | 'requires_retest' | 'incomplete' | 'manual_review';
+export type EvaluatedTestStatus = 'passed' | 'failed' | 'requires_retest' | 'incomplete' | 'manual_review' | 'skipped';
 
 export interface EvaluatedTest {
   testType: TestType;
   selection: TestSelectionResult;
-  result?: WeighingPerformanceTestResult | RepeatabilityTestResult | EccentricityTestResult;
+  result?: WeighingPerformanceTestResult | RepeatabilityTestResult | EccentricityTestResult | DiscriminationTestResult | ZeroSettingAccuracyTestResult;
   status: EvaluatedTestStatus;
   errorMessage?: string;
 }
@@ -50,6 +56,7 @@ export interface OrchestrationResult {
     requiresRetest: number;
     incomplete: number;
     manualReview: number;
+    skipped: number;
   };
   explanation: string;
 }
@@ -72,27 +79,35 @@ export function evaluateInstrumentCompliance(
     failed: 0,
     requiresRetest: 0,
     incomplete: 0,
-    manualReview: 0
+    manualReview: 0,
+    skipped: 0
   };
 
   for (const selection of selectionResults) {
     // 1. Check for manual review / unsupported conditions
-    const isManualReview = !selection.isApplicable;
-    
-    if (isManualReview) {
-      evaluatedTests.push({
-        testType: selection.testType,
-        selection,
-        status: 'manual_review'
-      });
-      counts.manualReview++;
+    if (!selection.isApplicable) {
+      if (selection.reason.includes('Unsupported') || selection.reason.toLowerCase().includes('unsupported') || selection.reason.toLowerCase().includes('manual review')) {
+        evaluatedTests.push({
+          testType: selection.testType,
+          selection,
+          status: 'manual_review'
+        });
+        counts.manualReview++;
+      } else {
+        evaluatedTests.push({
+          testType: selection.testType,
+          selection,
+          status: 'skipped'
+        });
+        counts.skipped++;
+      }
       continue;
     }
 
     // 2. Extract specific observations and evaluate
     let status: EvaluatedTestStatus = 'incomplete';
     let errorMessage: string | undefined;
-    let result: WeighingPerformanceTestResult | RepeatabilityTestResult | EccentricityTestResult | undefined;
+    let result: WeighingPerformanceTestResult | RepeatabilityTestResult | EccentricityTestResult | DiscriminationTestResult | ZeroSettingAccuracyTestResult | undefined;
 
     try {
       if (selection.testType === TestType.WeighingPerformance) {
@@ -112,6 +127,7 @@ export function evaluateInstrumentCompliance(
       else if (selection.testType === TestType.EccentricLoading) {
         if (!observations.eccentricLoading || observations.eccentricLoading.length === 0) {
           status = 'incomplete';
+          errorMessage = 'No observations recorded for eccentric loading test.';
         } else {
           result = evaluateEccentricLoadingTest(
             observations.eccentricLoading, 
@@ -119,6 +135,20 @@ export function evaluateInstrumentCompliance(
             context, 
             observations.eccentricZeroDeterminedBeforeEachLoading ?? false
           );
+        }
+      }
+      else if (selection.testType === TestType.Discrimination) {
+        if (!observations.discrimination || observations.discrimination.length === 0) {
+          status = 'incomplete';
+        } else {
+          result = evaluateDiscriminationTest(observations.discrimination, instrument, context);
+        }
+      }
+      else if (selection.testType === TestType.ZeroSettingAccuracy) {
+        if (!observations.zeroSettingAccuracy) {
+          status = 'incomplete';
+        } else {
+          result = evaluateZeroSettingTest(observations.zeroSettingAccuracy, instrument, context);
         }
       }
     } catch (error) {
@@ -135,6 +165,9 @@ export function evaluateInstrumentCompliance(
         status = 'failed';
       } else if (result.outcome === TestOutcome.RequiresRetest) {
         status = 'requires_retest';
+      } else if (result.outcome === TestOutcome.Incomplete) {
+        status = 'incomplete';
+        errorMessage = (result as { completeness?: { message?: string } }).completeness?.message || result.explanation;
       }
     }
 
@@ -154,7 +187,7 @@ export function evaluateInstrumentCompliance(
   }
 
   // 4. Determine overall outcome with precedence
-  let overallOutcome = OverallOutcome.Pass;
+  let overallOutcome = OverallOutcome.Incomplete;
   if (counts.failed > 0) {
     overallOutcome = OverallOutcome.Fail;
   } else if (counts.requiresRetest > 0) {
@@ -163,8 +196,10 @@ export function evaluateInstrumentCompliance(
     overallOutcome = OverallOutcome.ManualReview;
   } else if (counts.incomplete > 0) {
     overallOutcome = OverallOutcome.Incomplete;
-  } else {
+  } else if (counts.passed > 0) {
     overallOutcome = OverallOutcome.Pass;
+  } else {
+    overallOutcome = OverallOutcome.Incomplete;
   }
 
   // 5. Generate human readable explanation
@@ -178,7 +213,11 @@ export function evaluateInstrumentCompliance(
   } else if (overallOutcome === OverallOutcome.ManualReview) {
     explanation = 'Evaluation is halted pending manual review for unsupported or special configurations.';
   } else if (overallOutcome === OverallOutcome.Incomplete) {
-    explanation = 'Compliance evaluation is incomplete due to missing or invalid observation data for one or more applicable tests.';
+    if (counts.passed === 0 && counts.incomplete === 0) {
+      explanation = 'Compliance evaluation is incomplete because no applicable tests were completed or evaluated.';
+    } else {
+      explanation = 'Compliance evaluation is incomplete due to missing or invalid observation data for one or more applicable tests.';
+    }
   }
 
   return {

@@ -145,4 +145,103 @@ describe('Repeatability Calculation (R76 A.4.10 / 3.6.1)', () => {
       expect(passRes.outcome).toBe(TestOutcome.Pass);
     });
   });
+
+  describe('Multi-Series Repeatability (Type Evaluation A.4.10)', () => {
+    const typeEvalContext = VerificationContext.TypeEvaluation;
+    // For Class III with Max = 15000 kg (> 1000 kg):
+    // Standard requires at least 3 weighings per series, 2 series (approx 0.5 Max and close to Max)
+    // 0.5 Max = 7500 kg, Max = 15000 kg.
+    it('evaluates complete 2-series test with PASS', () => {
+      const multiObs: RepeatabilityObservation = {
+        series: [
+          {
+            seriesNumber: 1,
+            testLoad: 7500, // 0.5 Max
+            indications: [7500.0, 7501.0, 7500.5], // R = 1.0, 7500 / 5 = 1500e -> MPE = 1.0e = 5.0
+          },
+          {
+            seriesNumber: 2,
+            testLoad: 15000, // Max
+            indications: [15000.0, 15002.0, 15001.0], // R = 2.0, 15000 / 5 = 3000e -> MPE = 1.5e = 7.5
+          },
+        ],
+        autoZeroOrTrackingActive: true,
+      };
+
+      const res = evaluateRepeatabilityTest(multiObs, classIIIInstrument, typeEvalContext);
+      expect(res.outcome).toBe(TestOutcome.Pass);
+      expect(res.completeness?.isComplete).toBe(true);
+      expect(res.seriesResults).toHaveLength(2);
+      expect(res.seriesResults?.[0].repeatabilityRange).toBe(1.0);
+      expect(res.seriesResults?.[1].repeatabilityRange).toBe(2.0);
+    });
+
+    it('returns INCOMPLETE when Type Evaluation is missing the second series', () => {
+      const singleSeriesObs: RepeatabilityObservation = {
+        series: [
+          {
+            seriesNumber: 1,
+            testLoad: 7500,
+            indications: [7500.0, 7501.0, 7500.5],
+          },
+        ],
+        autoZeroOrTrackingActive: true,
+      };
+
+      const res = evaluateRepeatabilityTest(singleSeriesObs, classIIIInstrument, typeEvalContext);
+      expect(res.outcome).toBe(TestOutcome.Incomplete);
+      expect(res.completeness?.isComplete).toBe(false);
+      expect(res.completeness?.missingSeriesCount).toBe(1);
+    });
+
+    it('returns FAIL when one series exceeds MPE even if another passes (FAIL precedence)', () => {
+      const failingMultiObs: RepeatabilityObservation = {
+        series: [
+          {
+            seriesNumber: 1,
+            testLoad: 7500,
+            indications: [7500.0, 7501.0, 7500.5], // Pass
+          },
+          {
+            seriesNumber: 2,
+            testLoad: 15000,
+            // R = 15010 - 15000 = 10.0 > MPE (7.5) -> FAIL
+            indications: [15000.0, 15010.0, 15001.0],
+          },
+        ],
+        autoZeroOrTrackingActive: true,
+      };
+
+      const res = evaluateRepeatabilityTest(failingMultiObs, classIIIInstrument, typeEvalContext);
+      expect(res.outcome).toBe(TestOutcome.Fail);
+      expect(res.seriesResults?.[0].outcome).toBe(TestOutcome.Pass);
+      expect(res.seriesResults?.[1].outcome).toBe(TestOutcome.Fail);
+    });
+
+    it('enforces 10 weighings per series for instruments with Max < 1000 kg in Type Evaluation', () => {
+      const smallInstrument: Instrument = {
+        ...classIIIInstrument,
+        max: 30, // 30 kg < 1000 kg
+        e: 0.01,
+        d: 0.01,
+      };
+
+      // Only 3 weighings provided instead of required 10
+      const insufficientWeighingsObs: RepeatabilityObservation = {
+        series: [
+          {
+            seriesNumber: 1,
+            testLoad: 15,
+            indications: [15.0, 15.01, 15.0],
+          },
+        ],
+        autoZeroOrTrackingActive: true,
+      };
+
+      const res = evaluateRepeatabilityTest(insufficientWeighingsObs, smallInstrument, typeEvalContext);
+      expect(res.outcome).toBe(TestOutcome.Incomplete);
+      expect(res.completeness?.isComplete).toBe(false);
+      expect(res.completeness?.missingRequirements.some(r => r.includes('requires at least 10'))).toBe(true);
+    });
+  });
 });

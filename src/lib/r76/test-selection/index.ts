@@ -1,16 +1,19 @@
 /**
- * R76 Test-Selection module — placeholder
+ * R76 Test-Selection module.
  *
- * This module will export functions that determine which OIML R76 tests
- * apply to a given instrument, based on:
- *  - Accuracy class (I, II, III, IIII)
- *  - Maximum capacity (Max)
- *  - Verification scale interval (e)
- *  - Application type (retail, industrial, laboratory, etc.)
- *  - Special approval requirements
+ * Exports the automatic test-selection engine that determines which
+ * OIML R76 tests apply to a given instrument based on its stored
+ * configuration (instrument type, number of support points, auto-zero
+ * presence, and initial zero-setting range).
+ *
+ * Supported scope (this prototype):
+ *  - Single-range instruments only
+ *  - ≤ 4 load-receptor support points for eccentric loading
+ *  - All accuracy classes (I, II, III, IIII) — class does not gate test
+ *    applicability for the three currently supported tests
  *
  * @module lib/r76/test-selection
  */
 
-// No exports yet — implementation pending.
-export {};
+export { selectTests } from './engine';
+export type { TestSelectionResult } from './engine';

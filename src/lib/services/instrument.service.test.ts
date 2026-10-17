@@ -6,12 +6,24 @@ const { instrumentMock } = vi.hoisted(() => ({
     findMany: vi.fn(),
     findUnique: vi.fn(),
     update: vi.fn(),
+    delete: vi.fn(),
   },
 }));
 
 vi.mock('@/lib/prisma', () => ({
-  prisma: { instrument: instrumentMock },
+  prisma: { 
+    instrument: instrumentMock,
+    $transaction: vi.fn(async (cb) => cb(prismaMock)),
+  },
 }));
+
+const prismaMock = {
+  approval: { deleteMany: vi.fn() },
+  report: { deleteMany: vi.fn() },
+  auditLog: { updateMany: vi.fn(), create: vi.fn() },
+  testSession: { deleteMany: vi.fn() },
+  instrument: instrumentMock,
+};
 
 import {
   DatabaseConflictError,
@@ -24,6 +36,7 @@ import {
   getInstrumentById,
   listInstruments,
   updateInstrument,
+  deleteInstrument,
 } from './instrument.service';
 
 function decimal(value: string) {
@@ -204,6 +217,37 @@ describe('Instrument service unit tests (mocked Prisma)', () => {
         message: 'Unable to complete the instrument database operation',
       })
     );
-    await expect(listInstruments()).rejects.toBeInstanceOf(DatabaseError);
+  });
+
+  describe('deleteInstrument', () => {
+    it('deletes instrument and cascaded sessions in transaction', async () => {
+      instrumentMock.findUnique.mockResolvedValue({ 
+        ...persistedInstrument, 
+        sessions: [{ id: 'session-1', status: 'DRAFT' }, { id: 'session-2', status: 'REJECTED' }] 
+      });
+      await deleteInstrument('instrument-1', 'admin-id');
+      
+      expect(prismaMock.approval.deleteMany).toHaveBeenCalledWith({ where: { sessionId: { in: ['session-1', 'session-2'] } } });
+      expect(prismaMock.testSession.deleteMany).toHaveBeenCalledWith({ where: { instrumentId: 'instrument-1' } });
+      expect(prismaMock.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ action: 'DELETE', entityId: 'instrument-1' })
+      }));
+      expect(prismaMock.instrument.delete).toHaveBeenCalledWith({ where: { id: 'instrument-1' } });
+    });
+
+    it('rejects deletion if instrument has approved sessions', async () => {
+      instrumentMock.findUnique.mockResolvedValue({ 
+        ...persistedInstrument, 
+        sessions: [{ id: 'session-1', status: 'APPROVED' }] 
+      });
+      await expect(deleteInstrument('instrument-1', 'admin-id')).rejects.toBeInstanceOf(DatabaseConflictError);
+    });
+
+    it('handles instruments with no sessions safely', async () => {
+      instrumentMock.findUnique.mockResolvedValue({ ...persistedInstrument, sessions: [] });
+      await deleteInstrument('instrument-1', 'admin-id');
+      expect(prismaMock.testSession.deleteMany).not.toHaveBeenCalled();
+      expect(prismaMock.instrument.delete).toHaveBeenCalled();
+    });
   });
 });

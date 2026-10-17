@@ -3,7 +3,7 @@ import {
   DatabaseForeignKeyError,
   DatabaseNotFoundError,
 } from '@/lib/db/errors';
-import { getInstrumentById, updateInstrument } from '@/lib/services/instrument.service';
+import { getInstrumentById, updateInstrument, deleteInstrument } from '@/lib/services/instrument.service';
 import { validateInstrumentUpdate } from '@/lib/validation/instrument';
 import { requireApiUser } from '@/lib/auth/api-access';
 
@@ -67,6 +67,24 @@ export async function PATCH(
 
   try {
     return Response.json(await updateInstrument(id, validation.data), { status: 200 });
+  } catch (error) {
+    return serviceErrorResponse(error);
+  }
+}
+
+export async function DELETE(
+  _request: Request,
+  context: InstrumentRouteContext
+): Promise<Response> {
+  const access = await requireApiUser(['ADMIN']);
+  if (!access.authorized) return access.response;
+
+  const id = await routeId(context);
+  if (!id) return Response.json({ error: 'Invalid instrument ID' }, { status: 400 });
+
+  try {
+    await deleteInstrument(id, access.user.id);
+    return new Response(null, { status: 204 });
   } catch (error) {
     return serviceErrorResponse(error);
   }

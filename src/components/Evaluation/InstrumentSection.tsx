@@ -1,6 +1,6 @@
 'use client';
 
-import { AccuracyClass, VerificationContext } from '@/lib/r76/types';
+import { AccuracyClass, VerificationContext, normalizeVerificationContext } from '@/lib/r76/types';
 import { Card, Field, TextInput, Select, Checkbox } from '@/components/ui/FormField';
 import { ComplianceIcon } from '@/components/ui/ComplianceIcon';
 import type { InstrumentFormState } from './types';
@@ -13,16 +13,24 @@ const ACCURACY_CLASS_OPTIONS = [
 ];
 
 const VERIFICATION_CONTEXT_OPTIONS = [
+  { value: VerificationContext.TypeEvaluation, label: 'Type Evaluation' },
   { value: VerificationContext.InitialVerification, label: 'Initial Verification' },
   { value: VerificationContext.SubsequentVerification, label: 'Subsequent Verification' },
   { value: VerificationContext.ServiceInspection, label: 'Service Inspection' },
 ];
 
+const INDICATION_TYPE_OPTIONS = [
+  { value: '', label: 'Unspecified' },
+  { value: 'DIGITAL', label: 'Digital' },
+  { value: 'ANALOG', label: 'Analog' },
+];
+
 interface InstrumentSectionProps {
   value: InstrumentFormState;
   onChange: (next: InstrumentFormState) => void;
-  verificationContext: VerificationContext;
-  onVerificationContextChange: (context: VerificationContext) => void;
+  verificationContext: VerificationContext | string;
+  onVerificationContextChange?: (context: VerificationContext) => void;
+  isContextReadOnly?: boolean;
 }
 
 function GroupHeading({ children }: { children: string }) {
@@ -59,11 +67,11 @@ export function InstrumentSection({ value, onChange, verificationContext, onVeri
 
         <div className="border-t border-[#E4EAF0] pt-4">
           <GroupHeading>Instrument Configuration</GroupHeading>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
             <Field label="Instrument Type" hint="Registry value; the current evaluation engine supports single-range NAWI only"><TextInput value={value.instrumentType.replaceAll('_', ' ')} onChange={() => {}} disabled /></Field>
-            <Field label="Verification Context"><Select value={verificationContext} onChange={(v) => onVerificationContextChange(v as VerificationContext)} options={VERIFICATION_CONTEXT_OPTIONS} /></Field>
-            <Field label="Number of Support Points" hint="Used for eccentric-loading selection"><TextInput type="number" value={value.numberOfSupportPoints} onChange={(v) => set('numberOfSupportPoints', v)} placeholder="4" /></Field>
-            <Field label="Initial Zero-Setting Range (kg)" hint={value.hasInitialZeroSettingDevice ? 'Range in the same unit as Max' : 'Enable the device to enter a range'}><TextInput type="number" step="any" value={value.initialZeroSettingRange} onChange={(v) => set('initialZeroSettingRange', v)} disabled={!value.hasInitialZeroSettingDevice} placeholder="0" /></Field>
+            <Field label="Indication Type" hint="Required for digital discrimination test"><Select value={value.indicationType ? value.indicationType.toUpperCase() : ''} onChange={(v) => set('indicationType', (v || null) as any)} options={INDICATION_TYPE_OPTIONS} /></Field>
+            <Field label="Verification Context" hint="Active session procedure context"><Select value={normalizeVerificationContext(verificationContext)} onChange={(v) => onVerificationContextChange?.(v as VerificationContext)} options={VERIFICATION_CONTEXT_OPTIONS} disabled /></Field>
+            <Field label="Initial Zero-Setting Range (fraction of Max, 0.00–1.00)" hint={value.hasInitialZeroSettingDevice ? 'Enter as fraction of Max (e.g. 0.20 for 20% of Max per R76-1 §4.5)' : 'Enable the device to enter a range'} error={value.hasInitialZeroSettingDevice && (Number(value.initialZeroSettingRange) > 1 || Number(value.initialZeroSettingRange) < 0) ? 'Must be between 0.00 and 1.00 (fraction of Max)' : undefined}><TextInput type="number" step="any" value={value.initialZeroSettingRange} onChange={(v) => set('initialZeroSettingRange', v)} disabled={!value.hasInitialZeroSettingDevice} placeholder="0.20" hasError={value.hasInitialZeroSettingDevice && (Number(value.initialZeroSettingRange) > 1 || Number(value.initialZeroSettingRange) < 0)} /></Field>
           </div>
 
           <div className="mt-4 grid grid-cols-1 gap-3 rounded-md border border-[#D9E2EC] bg-[#F8FAFC] p-3.5 sm:grid-cols-2 lg:grid-cols-4">
@@ -71,6 +79,30 @@ export function InstrumentSection({ value, onChange, verificationContext, onVeri
             <Checkbox label="Auto-Zero / Zero-Tracking" checked={value.hasAutoZeroOrTracking} onChange={(v) => set('hasAutoZeroOrTracking', v)} hint="Automatic zero or zero-tracking fitted" />
             <Checkbox label="Initial Zero-Setting Device" checked={value.hasInitialZeroSettingDevice} onChange={(v) => set('hasInitialZeroSettingDevice', v)} hint="Initial zero-setting device fitted" />
             <Checkbox label="Fine Display Device" checked={value.hasFineDisplayDevice} onChange={(v) => set('hasFineDisplayDevice', v)} hint="Fine indication facility fitted" />
+          </div>
+          
+          <GroupHeading>Zero-Setting Mechanisms</GroupHeading>
+          <div className="mt-4 grid grid-cols-1 gap-3 rounded-md border border-[#D9E2EC] bg-[#F8FAFC] p-3.5 sm:grid-cols-2 lg:grid-cols-4">
+            <Checkbox label="Non-Automatic" checked={value.zeroSettingMechanisms.includes('NON_AUTOMATIC')} onChange={(v) => {
+              const current = new Set(value.zeroSettingMechanisms);
+              if (v) current.add('NON_AUTOMATIC'); else current.delete('NON_AUTOMATIC');
+              set('zeroSettingMechanisms', Array.from(current));
+            }} hint="Non-automatic zero-setting" />
+            <Checkbox label="Semi-Automatic" checked={value.zeroSettingMechanisms.includes('SEMI_AUTOMATIC')} onChange={(v) => {
+              const current = new Set(value.zeroSettingMechanisms);
+              if (v) current.add('SEMI_AUTOMATIC'); else current.delete('SEMI_AUTOMATIC');
+              set('zeroSettingMechanisms', Array.from(current));
+            }} hint="Semi-automatic zero-setting" />
+            <Checkbox label="Automatic" checked={value.zeroSettingMechanisms.includes('AUTOMATIC')} onChange={(v) => {
+              const current = new Set(value.zeroSettingMechanisms);
+              if (v) current.add('AUTOMATIC'); else current.delete('AUTOMATIC');
+              set('zeroSettingMechanisms', Array.from(current));
+            }} hint="Automatic zero-setting" />
+            <Checkbox label="Zero-Tracking" checked={value.zeroSettingMechanisms.includes('ZERO_TRACKING')} onChange={(v) => {
+              const current = new Set(value.zeroSettingMechanisms);
+              if (v) current.add('ZERO_TRACKING'); else current.delete('ZERO_TRACKING');
+              set('zeroSettingMechanisms', Array.from(current));
+            }} hint="Zero-tracking device" />
           </div>
         </div>
       </div>

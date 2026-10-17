@@ -10,6 +10,15 @@ import type {
   ApprovalActionValue,
   ApprovalCreatePayload,
 } from '@/lib/validation/approval';
+import { selectTests } from '@/lib/r76/test-selection/engine';
+import { VerificationContext } from '@/lib/r76/types';
+
+const VERIFICATION_CONTEXT_MAP: Record<string, VerificationContext> = {
+  INITIAL_VERIFICATION: VerificationContext.InitialVerification,
+  SUBSEQUENT_VERIFICATION: VerificationContext.SubsequentVerification,
+  SERVICE_INSPECTION: VerificationContext.ServiceInspection,
+  TYPE_EVALUATION: VerificationContext.TypeEvaluation,
+};
 
 export interface ApprovalRecord {
   id: string;
@@ -98,18 +107,24 @@ function requireStatus(
 function transitionFor(
   session: TestSession,
   user: { id: string; role: Role },
-  action: ApprovalActionValue
-): { status: SessionStatus; reviewerId?: string; approverId?: string; completedAt?: Date } {
+  action: ApprovalActionValue,
+  comments?: string | null
+): { status: SessionStatus; reviewerId?: string; approverId?: string; completedAt?: Date; revisionNumber?: number } {
   switch (action) {
     case 'SUBMIT_FOR_REVIEW':
-      requireStatus(session.status, 'IN_PROGRESS', action);
+      if (session.status !== 'IN_PROGRESS' && session.status !== 'RETURNED') {
+        throw new ApprovalWorkflowValidationError(`SUBMIT_FOR_REVIEW is not valid while the session is ${session.status}`);
+      }
       requireRole(user.role, 'LAB_TECHNICIAN', action);
       if (user.role !== 'ADMIN' && user.id !== session.technicianId) {
         throw new ApprovalWorkflowValidationError(
           'Only the technician assigned to this session may submit it for review'
         );
       }
-      return { status: 'PENDING_REVIEW' };
+      return { 
+        status: 'PENDING_REVIEW',
+        ...(session.status === 'RETURNED' ? { revisionNumber: session.revisionNumber + 1 } : {})
+      };
     case 'REVIEW_APPROVE':
       requireStatus(session.status, 'PENDING_REVIEW', action);
       requireRole(user.role, 'REVIEWING_OFFICER', action);
@@ -126,6 +141,18 @@ function transitionFor(
       requireStatus(session.status, 'PENDING_APPROVAL', action);
       requireRole(user.role, 'APPROVING_OFFICER', action);
       return { status: 'REJECTED', approverId: user.id, completedAt: new Date() };
+    case 'RETURN':
+      if (session.status !== 'PENDING_REVIEW' && session.status !== 'PENDING_APPROVAL') {
+        throw new ApprovalWorkflowValidationError(
+          `RETURN is not valid while the session is ${session.status}`
+        );
+      }
+      if (session.status === 'PENDING_REVIEW') requireRole(user.role, 'REVIEWING_OFFICER', action);
+      if (session.status === 'PENDING_APPROVAL') requireRole(user.role, 'APPROVING_OFFICER', action);
+      if (!comments || comments.trim() === '') {
+        throw new ApprovalWorkflowValidationError('A correction reason (comments) is mandatory when returning a session');
+      }
+      return { status: 'RETURNED' };
     case 'CANCEL':
       if (!['DRAFT', 'IN_PROGRESS', 'PENDING_REVIEW'].includes(session.status)) {
         throw new ApprovalWorkflowValidationError(
@@ -163,8 +190,26 @@ async function assertResultsReady(
   const { instrumentConfigFingerprint } = await import('@/lib/db/observation-fingerprint');
   const currentConfigFp = instrumentConfigFingerprint(instrument, session.verificationContext);
 
+  const verificationContext =
+    VERIFICATION_CONTEXT_MAP[session.verificationContext] ??
+    (session.verificationContext.toLowerCase() as VerificationContext);
+
+  const applicableTestTypes = new Set(
+    selectTests({
+      ...instrument,
+      instrumentType: instrument.instrumentType.toLowerCase(),
+      indicationType: instrument.indicationType?.toLowerCase(),
+      e: Number(instrument.e),
+      d: Number(instrument.d),
+      min: Number(instrument.min),
+      max: Number(instrument.max),
+    } as any, verificationContext)
+      .filter(s => s.isApplicable)
+      .map(s => s.testType.toUpperCase())
+  );
+
   for (const item of assessResultFreshness(observations, results, session.rulesetVersionId, currentConfigFp)) {
-    if (item.state !== 'CURRENT') {
+    if (item.state !== 'CURRENT' && applicableTestTypes.has(item.testType)) {
       throw new DatabaseConflictError(
         `${item.testType}: ${item.state}; all results must match saved observations, instrument configuration, and ruleset before approval`
       );
@@ -192,9 +237,27 @@ export async function createApproval(
         throw new DatabaseNotFoundError('Active approval user not found');
       }
 
-      const transition = transitionFor(session, user, input.action);
+      const transition = transitionFor(session, user, input.action, input.comments);
       if (['PENDING_REVIEW', 'PENDING_APPROVAL', 'APPROVED'].includes(transition.status)) {
         await assertResultsReady(tx, session);
+      }
+
+      // If submitting for review, create a snapshot of observations and results
+      if (input.action === 'SUBMIT_FOR_REVIEW') {
+        const [observations, results] = await Promise.all([
+          tx.testObservation.findMany({ where: { sessionId: session.id } }),
+          tx.testResult.findMany({ where: { sessionId: session.id } }),
+        ]);
+        
+        const nextRevision = transition.revisionNumber ?? session.revisionNumber;
+        await tx.testSessionSnapshot.create({
+          data: {
+            sessionId: session.id,
+            revisionNumber: nextRevision,
+            observationsData: observations as any,
+            resultsData: results as any,
+          }
+        });
       }
 
       const update = await tx.testSession.updateMany({
@@ -210,6 +273,7 @@ export async function createApproval(
           sessionId: input.sessionId,
           userId: authenticatedUserId,
           action: input.action,
+          sessionRevision: transition.revisionNumber ?? session.revisionNumber,
           ...(input.comments !== undefined ? { comments: input.comments } : {}),
           ...(input.createdAt !== undefined ? { createdAt: input.createdAt } : {}),
         },

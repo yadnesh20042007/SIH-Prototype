@@ -4,6 +4,7 @@ import {
   DatabaseNotFoundError,
 } from '@/lib/db/errors';
 import {
+  deleteTestObservation,
   getTestObservationById,
   updateTestObservation,
 } from '@/lib/services/test-observation.service';
@@ -74,6 +75,24 @@ export async function PATCH(
 
   try {
     return Response.json(await updateTestObservation(id, validation.data), { status: 200 });
+  } catch (error) {
+    return serviceErrorResponse(error);
+  }
+}
+
+export async function DELETE(
+  _request: Request,
+  context: TestObservationRouteContext
+): Promise<Response> {
+  const access = await requireApiUser(['LAB_TECHNICIAN', 'ADMIN']);
+  if (!access.authorized) return access.response;
+  const id = await routeId(context);
+  if (!id) return Response.json({ error: 'Invalid test observation ID' }, { status: 400 });
+  if (!await technicianOwnsObservation(access.user, id)) return forbiddenOwnership();
+
+  try {
+    await deleteTestObservation(id);
+    return new Response(null, { status: 204 });
   } catch (error) {
     return serviceErrorResponse(error);
   }

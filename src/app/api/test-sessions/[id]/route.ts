@@ -7,6 +7,7 @@ import {
   getTestSessionById,
   startTestSessionProgress,
   updateTestSession,
+  deleteTestSession,
 } from '@/lib/services/test-session.service';
 import { validateTestSessionUpdate } from '@/lib/validation/test-session';
 import { forbiddenOwnership, requireApiUser, technicianOwnsSession } from '@/lib/auth/api-access';
@@ -107,6 +108,24 @@ export async function PATCH(
 
   try {
     return Response.json(await updateTestSession(id, validation.data), { status: 200 });
+  } catch (error) {
+    return serviceErrorResponse(error);
+  }
+}
+
+export async function DELETE(
+  _request: Request,
+  context: TestSessionRouteContext
+): Promise<Response> {
+  const access = await requireApiUser(['ADMIN']);
+  if (!access.authorized) return access.response;
+
+  const id = await routeId(context);
+  if (!id) return Response.json({ error: 'Invalid test session ID' }, { status: 400 });
+
+  try {
+    await deleteTestSession(id, access.user.id);
+    return new Response(null, { status: 204 });
   } catch (error) {
     return serviceErrorResponse(error);
   }

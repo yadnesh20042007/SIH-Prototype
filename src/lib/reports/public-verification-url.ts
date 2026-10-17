@@ -1,15 +1,23 @@
 const LOCAL_DEVELOPMENT_APP_URL = 'http://localhost:3000';
+export const PRODUCTION_APP_URL = 'https://metrify-nawi-system.vercel.app';
 
 export function publicAppUrl(): string {
-  const configured = process.env.NEXT_PUBLIC_APP_URL?.trim() || LOCAL_DEVELOPMENT_APP_URL;
-  const url = new URL(configured);
-  if (!['http:', 'https:'].includes(url.protocol)) {
-    throw new Error('NEXT_PUBLIC_APP_URL must use HTTP or HTTPS');
+  const configured = process.env.NEXT_PUBLIC_APP_URL?.trim();
+  if (configured) {
+    const url = new URL(configured);
+    if (!['http:', 'https:'].includes(url.protocol)) {
+      throw new Error('NEXT_PUBLIC_APP_URL must use HTTP or HTTPS');
+    }
+    if (url.username || url.password || url.search || url.hash || (url.pathname !== '/' && url.pathname !== '')) {
+      throw new Error('NEXT_PUBLIC_APP_URL must be an origin without credentials, path, query, or fragment');
+    }
+    return url.origin;
   }
-  if (url.username || url.password || url.search || url.hash || (url.pathname !== '/' && url.pathname !== '')) {
-    throw new Error('NEXT_PUBLIC_APP_URL must be an origin without credentials, path, query, or fragment');
+
+  if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
+    return PRODUCTION_APP_URL;
   }
-  return url.origin;
+  return LOCAL_DEVELOPMENT_APP_URL;
 }
 
 export function publicVerificationPath(qrVerificationId: string): string {

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   testObservation: { findMany: vi.fn() },
   testResult: { findMany: vi.fn() },
   testSession: { findUnique: vi.fn(), updateMany: vi.fn() },
+  testSessionSnapshot: { create: vi.fn() },
   user: { findUnique: vi.fn() },
   transaction: vi.fn(),
 }));
@@ -19,6 +20,7 @@ vi.mock('@/lib/prisma', () => ({
     testObservation: mocks.testObservation,
     testResult: mocks.testResult,
     testSession: mocks.testSession,
+    testSessionSnapshot: mocks.testSessionSnapshot,
     user: mocks.user,
     $transaction: mocks.transaction,
   },
@@ -45,7 +47,7 @@ const session = {
   verificationContext: 'INITIAL_VERIFICATION', status: 'IN_PROGRESS',
   rulesetVersionId: 'ruleset-1', technicianId: 'technician-1',
   reviewerId: null, approverId: null, notes: null,
-  createdAt: now, updatedAt: now, completedAt: null,
+  createdAt: now, updatedAt: now, completedAt: null, revisionNumber: 1,
 };
 
 // Minimal instrument fixture with evaluation-relevant fields only.
@@ -126,6 +128,7 @@ function installReadyState(
   mocks.testObservation.findMany.mockResolvedValue(observations);
   mocks.testResult.findMany.mockResolvedValue(results);
   mocks.testSession.updateMany.mockResolvedValue({ count: 1 });
+  mocks.testSessionSnapshot.create.mockResolvedValue({ id: 'snapshot-1' });
   mocks.approval.create.mockResolvedValue({
     ...approval,
     user: { id: user.id, name: user.name, role: user.role },
@@ -141,6 +144,7 @@ describe('Approval service unit tests (mocked Prisma)', () => {
       testObservation: mocks.testObservation,
       testResult: mocks.testResult,
       testSession: mocks.testSession,
+      testSessionSnapshot: mocks.testSessionSnapshot,
       user: mocks.user,
     }));
   });
@@ -359,5 +363,97 @@ describe('Approval service unit tests (mocked Prisma)', () => {
     await expect(createApproval({
       sessionId: 'session-1', action: 'SUBMIT_FOR_REVIEW',
     }, 'technician-1')).rejects.toMatchObject({ code: 'CONFLICT', message: expect.stringContaining('STALE') });
+  });
+
+  it('allows a reviewer to return a pending session for correction with a comment', async () => {
+    installReadyState('PENDING_REVIEW', users.reviewer);
+    mocks.testSession.findUnique.mockReset()
+      .mockResolvedValueOnce({ ...session, status: 'PENDING_REVIEW' })
+      .mockResolvedValueOnce({
+        ...session, status: 'RETURNED', updatedAt: now,
+      });
+
+    const result = await createApproval({
+      sessionId: 'session-1',
+      action: 'RETURN',
+      comments: 'Please verify tare values and re-measure eccentricity load 3.',
+    }, 'reviewer-1');
+
+    expect(result.session.status).toBe('RETURNED');
+    expect(mocks.testSession.updateMany).toHaveBeenCalledWith({
+      where: { id: 'session-1', status: 'PENDING_REVIEW' },
+      data: { status: 'RETURNED' },
+    });
+    expect(mocks.approval.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        action: 'RETURN',
+        comments: 'Please verify tare values and re-measure eccentricity load 3.',
+        userId: 'reviewer-1',
+      }),
+    }));
+  });
+
+  it('rejects returning a session without mandatory correction comments', async () => {
+    installReadyState('PENDING_REVIEW', users.reviewer);
+    mocks.testSession.findUnique.mockResolvedValue({ ...session, status: 'PENDING_REVIEW' });
+
+    await expect(createApproval({
+      sessionId: 'session-1',
+      action: 'RETURN',
+      comments: '',
+    }, 'reviewer-1')).rejects.toThrow(ApprovalWorkflowValidationError);
+
+    expect(mocks.testSession.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('resubmits a RETURNED session, incrementing revisionNumber and creating an immutable snapshot', async () => {
+    installReadyState('RETURNED', users.technician);
+    mocks.testSession.findUnique.mockReset()
+      .mockResolvedValueOnce({ ...session, status: 'RETURNED', revisionNumber: 1 })
+      .mockResolvedValueOnce({
+        ...session, status: 'PENDING_REVIEW', revisionNumber: 2, updatedAt: now,
+      });
+
+    const result = await createApproval({
+      sessionId: 'session-1',
+      action: 'SUBMIT_FOR_REVIEW',
+      comments: 'Corrected eccentricity observations as requested.',
+    }, 'technician-1');
+
+    expect(result.session.status).toBe('PENDING_REVIEW');
+    expect(mocks.testSession.updateMany).toHaveBeenCalledWith({
+      where: { id: 'session-1', status: 'RETURNED' },
+      data: { status: 'PENDING_REVIEW', revisionNumber: 2 },
+    });
+    expect(mocks.testSessionSnapshot.create).toHaveBeenCalledWith({
+      data: {
+        sessionId: 'session-1',
+        revisionNumber: 2,
+        observationsData: observations,
+        resultsData: results,
+      },
+    });
+  });
+
+  it('allows final approval of a session containing FAIL results as long as freshness is CURRENT', async () => {
+    installReadyState('PENDING_APPROVAL', users.approver);
+    const failResults = results.map(r => ({ ...r, outcome: 'FAIL' }));
+    mocks.testResult.findMany.mockResolvedValue(failResults);
+    mocks.testSession.findUnique.mockReset()
+      .mockResolvedValueOnce({ ...session, status: 'PENDING_APPROVAL', reviewerId: 'reviewer-1' })
+      .mockResolvedValueOnce({
+        ...session, status: 'APPROVED', reviewerId: 'reviewer-1',
+        approverId: 'approver-1', completedAt: now, updatedAt: now,
+      });
+
+    const result = await createApproval({
+      sessionId: 'session-1',
+      action: 'FINAL_APPROVE',
+    }, 'approver-1');
+
+    expect(result.session.status).toBe('APPROVED');
+    expect(mocks.testSession.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: 'APPROVED', approverId: 'approver-1' }),
+    }));
   });
 });

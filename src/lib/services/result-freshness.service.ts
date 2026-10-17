@@ -3,7 +3,33 @@ import { prisma } from '@/lib/prisma';
 import { observationFingerprint, instrumentConfigFingerprint } from '@/lib/db/observation-fingerprint';
 import { DatabaseNotFoundError, throwMappedDatabaseError } from '@/lib/db/errors';
 
-export const PROTOTYPE_TEST_TYPES = ['WEIGHING_PERFORMANCE', 'REPEATABILITY', 'ECCENTRIC_LOADING'] as const;
+/**
+ * All DB-level test type strings supported by this prototype's evaluation and
+ * freshness-checking pipelines.
+ *
+ * ─── REGISTRATION POINT ──────────────────────────────────────────────────────
+ * When adding a new R76 test, add its SCREAMING_SNAKE_CASE stored string here.
+ * This constant is the single source of truth for the DB layer — it drives:
+ *   • conflict detection in session-evaluation.service.ts
+ *   • freshness assessment in assessResultFreshness()
+ *
+ * You must also update (in this order):
+ *   1. Prisma schema    — add the value to the TestType enum and run a migration
+ *   2. TestType (TS)    — src/lib/r76/types/test.ts
+ *   3. TestObservations — src/lib/r76/engine/index.ts
+ *   4. STORED_TYPE_BY_ENGINE_TYPE — src/components/Evaluation/result-persistence.ts
+ *   5. Validation       — src/lib/validation/test-observation.ts and test-result.ts
+ *   6. session-evaluation.service.ts — add observation extraction block
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+export const PROTOTYPE_TEST_TYPES = [
+  'WEIGHING_PERFORMANCE',
+  'REPEATABILITY',
+  'ECCENTRIC_LOADING',
+  'DISCRIMINATION',
+  'ZERO_SETTING_ACCURACY',
+] as const;
+
 export type FreshnessState = 'CURRENT' | 'STALE' | 'MISSING' | 'CONFLICT';
 
 export interface ObservationSnapshot {
@@ -47,7 +73,7 @@ export function logicalObservationFingerprint(rows: ObservationSnapshot[]): stri
 
 export function observationConflict(rows: ObservationSnapshot[], testType: string): boolean {
   if (new Set(rows.map(row => row.sequenceIndex)).size !== rows.length) return true;
-  if (testType === 'REPEATABILITY' && rows.length > 1) return true;
+  if ((testType === 'REPEATABILITY' || testType === 'ZERO_SETTING_ACCURACY') && rows.length > 1) return true;
   if (testType === 'ECCENTRIC_LOADING') {
     const data = rows.map(row => row.observationData as Record<string, unknown>);
     if (new Set(data.map(row => row.positionId)).size !== rows.length) return true;

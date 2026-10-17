@@ -1,5 +1,5 @@
 import { Instrument, InstrumentType } from '../types/instrument';
-import { VerificationContext } from '../types/verification';
+import { VerificationContext, isTypeEvaluationContext } from '../types/verification';
 import { TestType } from '../types/test';
 
 export interface TestSelectionResult {
@@ -20,7 +20,7 @@ export interface TestSelectionResult {
  */
 export function selectTests(
   instrument: Instrument,
-  context: VerificationContext
+  context: VerificationContext | string
 ): TestSelectionResult[] {
   const results: TestSelectionResult[] = [];
 
@@ -110,6 +110,101 @@ export function selectTests(
       reason: 'Applies to standard-platform instruments with ≤ 4 support points.',
       r76Reference: 'OIML R76-1 clause 3.6.2.1, A.4.7.1',
       prerequisites
+    });
+  }
+
+  // 4. Discrimination
+  if (!isSingleRange) {
+    results.push({
+      testType: TestType.Discrimination,
+      isApplicable: false,
+      reason: 'Unsupported: Only single-range instruments are currently supported.',
+      r76Reference: 'OIML R76-1 clause A.4.1.11',
+      prerequisites: [],
+    });
+  } else if (!isTypeEvaluationContext(context)) {
+    results.push({
+      testType: TestType.Discrimination,
+      isApplicable: false,
+      reason: 'Digital discrimination test applies to type examination only.',
+      r76Reference: 'OIML R76-1 clause 3.8.2.2',
+      prerequisites: [],
+    });
+  } else if (instrument.indicationType !== 'digital') {
+    results.push({
+      testType: TestType.Discrimination,
+      isApplicable: false,
+      reason: 'Only digital indication discrimination test is currently supported by the prototype.',
+      r76Reference: 'OIML R76-1 clause A.4.8.2',
+      prerequisites: [],
+    });
+  } else if (instrument.d < 0.000005) { // d < 5 mg (assuming kg as base unit, 5 mg = 0.000005 kg)
+    results.push({
+      testType: TestType.Discrimination,
+      isApplicable: false,
+      reason: 'Discrimination test for digital indication requires d >= 5 mg.',
+      r76Reference: 'OIML R76-1 clause 3.8.2.2',
+      prerequisites: [],
+    });
+  } else {
+    results.push({
+      testType: TestType.Discrimination,
+      isApplicable: true,
+      reason: 'Discrimination test for digital indication applies (d >= 5 mg).',
+      r76Reference: 'OIML R76-1 clause 3.8.2.2, A.4.8.2',
+      prerequisites: [
+        'Test loads should be Min, 0.5 × Max, and Max (A.4.8).',
+      ],
+    });
+  }
+
+  // 5. Zero-Setting Accuracy
+  if (!isSingleRange) {
+    results.push({
+      testType: TestType.ZeroSettingAccuracy,
+      isApplicable: false,
+      reason: 'Unsupported: Only single-range instruments are currently supported.',
+      r76Reference: 'OIML R76-1 clause A.4.1.11',
+      prerequisites: [],
+    });
+  } else if (instrument.zeroSettingMechanisms && instrument.zeroSettingMechanisms.length > 0) {
+    results.push({
+      testType: TestType.ZeroSettingAccuracy,
+      isApplicable: true,
+      reason: 'Zero-setting accuracy must be verified for instruments with zero-setting mechanisms.',
+      r76Reference: 'OIML R76-1 clause 4.5.2, A.4.2.3',
+      prerequisites: [
+        'For automatic/tracking: Load instrument to bring it out of zero-tracking range (e.g. 10e) (A.4.2.3.2).',
+      ],
+    });
+  } else if (instrument.zeroSettingMechanisms === undefined) {
+    results.push({
+      testType: TestType.ZeroSettingAccuracy,
+      isApplicable: false,
+      reason: 'Unsupported: Zero-setting mechanism metadata is missing or unrecorded. Confirm whether zero-setting mechanisms are fitted (clause 4.5.2).',
+      r76Reference: 'OIML R76-1 clause 4.5.2',
+      prerequisites: [],
+    });
+  } else if (
+    Array.isArray(instrument.zeroSettingMechanisms) &&
+    instrument.zeroSettingMechanisms.length === 0 &&
+    (instrument.hasAutoZeroOrTracking || instrument.hasInitialZeroSettingDevice)
+  ) {
+    results.push({
+      testType: TestType.ZeroSettingAccuracy,
+      isApplicable: false,
+      reason: 'Unsupported: Contradictory configuration — instrument has zero-setting device flags enabled (hasAutoZeroOrTracking or hasInitialZeroSettingDevice) but zeroSettingMechanisms is empty. Manual review and mechanism clarification required.',
+      r76Reference: 'OIML R76-1 clause 4.5.2, A.4.2.3',
+      prerequisites: [],
+    });
+  } else {
+    // instrument.zeroSettingMechanisms is an empty array: genuinely not fitted
+    results.push({
+      testType: TestType.ZeroSettingAccuracy,
+      isApplicable: false,
+      reason: 'No zero-setting mechanism is fitted on this instrument (clause 4.5.2).',
+      r76Reference: 'OIML R76-1 clause 4.5.2',
+      prerequisites: [],
     });
   }
 

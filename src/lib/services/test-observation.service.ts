@@ -1,7 +1,7 @@
 import type { TestObservation } from '@prisma/client';
 import { observationFingerprint } from '@/lib/db/observation-fingerprint';
 
-import { DatabaseNotFoundError, throwMappedDatabaseError } from '@/lib/db/errors';
+import { DatabaseConflictError, DatabaseNotFoundError, throwMappedDatabaseError } from '@/lib/db/errors';
 import { prisma } from '@/lib/prisma';
 import type {
   JsonValue,
@@ -89,6 +89,24 @@ export async function updateTestObservation(
       }
       return toTestObservationRecord(observation);
     });
+  } catch (error) {
+    throwMappedDatabaseError(error, 'TestObservation');
+  }
+}
+
+export async function deleteTestObservation(id: string): Promise<void> {
+  try {
+    const existing = await prisma.testObservation.findUnique({
+      where: { id },
+      include: { session: true },
+    });
+    if (!existing) {
+      throw new DatabaseNotFoundError('TestObservation not found');
+    }
+    if (['PENDING_REVIEW', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED'].includes(existing.session.status)) {
+      throw new DatabaseConflictError('Cannot delete observation from a finalized or locked session');
+    }
+    await prisma.testObservation.delete({ where: { id } });
   } catch (error) {
     throwMappedDatabaseError(error, 'TestObservation');
   }

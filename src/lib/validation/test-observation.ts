@@ -8,6 +8,8 @@ export const TEST_OBSERVATION_TYPES = [
   'WEIGHING_PERFORMANCE',
   'REPEATABILITY',
   'ECCENTRIC_LOADING',
+  'DISCRIMINATION',
+  'ZERO_SETTING_ACCURACY',
 ] as const;
 
 export type TestObservationType = (typeof TEST_OBSERVATION_TYPES)[number];
@@ -111,11 +113,33 @@ function validateWeighing(data: Body, result: ValidationResult): void {
 }
 
 function validateRepeatability(data: Body, result: ValidationResult): void {
-  finiteNumber(data, 'testLoad', result);
-  if (!Array.isArray(data.indications)) {
-    result.add('observationData.indications', 'must be an array of finite numbers');
-  } else if (!data.indications.every((value) => typeof value === 'number' && Number.isFinite(value))) {
-    result.add('observationData.indications', 'must contain only finite numbers');
+  if (has(data, 'series')) {
+    if (!Array.isArray(data.series) || data.series.length === 0) {
+      result.add('observationData.series', 'must be a non-empty array of series objects');
+    } else {
+      data.series.forEach((s, idx) => {
+        if (typeof s !== 'object' || s === null) {
+          result.add(`observationData.series[${idx}]`, 'must be an object');
+          return;
+        }
+        const seriesObj = s as Body;
+        if (typeof seriesObj.testLoad !== 'number' || !Number.isFinite(seriesObj.testLoad)) {
+          result.add(`observationData.series[${idx}].testLoad`, 'must be a finite number');
+        }
+        if (!Array.isArray(seriesObj.indications)) {
+          result.add(`observationData.series[${idx}].indications`, 'must be an array of finite numbers');
+        } else if (!seriesObj.indications.every((value) => typeof value === 'number' && Number.isFinite(value))) {
+          result.add(`observationData.series[${idx}].indications`, 'must contain only finite numbers');
+        }
+      });
+    }
+  } else {
+    finiteNumber(data, 'testLoad', result);
+    if (!Array.isArray(data.indications)) {
+      result.add('observationData.indications', 'must be an array of finite numbers');
+    } else if (!data.indications.every((value) => typeof value === 'number' && Number.isFinite(value))) {
+      result.add('observationData.indications', 'must contain only finite numbers');
+    }
   }
   booleanField(data, 'autoZeroOrTrackingActive', result);
 }
@@ -134,6 +158,18 @@ function validateEccentric(data: Body, result: ValidationResult): void {
   }
 }
 
+function validateDiscrimination(data: Body, result: ValidationResult): void {
+  finiteNumber(data, 'testLoad', result);
+  finiteNumber(data, 'indicationBefore', result);
+  finiteNumber(data, 'indicationAfter', result);
+}
+
+function validateZeroSetting(data: Body, result: ValidationResult): void {
+  finiteNumber(data, 'load', result);
+  finiteNumber(data, 'indicatedValue', result);
+  finiteNumber(data, 'additionalLoad', result);
+}
+
 function observationData(
   body: Body,
   result: ValidationResult,
@@ -149,6 +185,8 @@ function observationData(
   if (type === 'WEIGHING_PERFORMANCE') validateWeighing(data, result);
   if (type === 'REPEATABILITY') validateRepeatability(data, result);
   if (type === 'ECCENTRIC_LOADING') validateEccentric(data, result);
+  if (type === 'DISCRIMINATION') validateDiscrimination(data, result);
+  if (type === 'ZERO_SETTING_ACCURACY') validateZeroSetting(data, result);
   return data;
 }
 

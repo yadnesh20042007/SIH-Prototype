@@ -10,9 +10,13 @@ import {
 
 export const INSTRUMENT_ACCURACY_CLASSES = ['I', 'II', 'III', 'IIII'] as const;
 export const INSTRUMENT_TYPES = ['SINGLE_RANGE', 'MULTI_RANGE', 'MULTI_INTERVAL'] as const;
+export const INSTRUMENT_INDICATION_TYPES = ['DIGITAL', 'ANALOG'] as const;
+export const ZERO_SETTING_MECHANISMS = ['NON_AUTOMATIC', 'SEMI_AUTOMATIC', 'AUTOMATIC', 'ZERO_TRACKING'] as const;
 
 export type InstrumentAccuracyClass = (typeof INSTRUMENT_ACCURACY_CLASSES)[number];
 export type PrismaInstrumentType = (typeof INSTRUMENT_TYPES)[number];
+export type PrismaIndicationType = (typeof INSTRUMENT_INDICATION_TYPES)[number];
+export type PrismaZeroSettingMechanism = (typeof ZERO_SETTING_MECHANISMS)[number];
 
 export interface InstrumentCreatePayload {
   manufacturerId: string;
@@ -20,6 +24,7 @@ export interface InstrumentCreatePayload {
   serialNumber?: string | null;
   accuracyClass: InstrumentAccuracyClass;
   instrumentType?: PrismaInstrumentType;
+  indicationType?: PrismaIndicationType | null;
   max: string;
   min: string;
   e: string;
@@ -30,6 +35,7 @@ export interface InstrumentCreatePayload {
   hasInitialZeroSettingDevice?: boolean;
   initialZeroSettingRange?: string;
   hasFineDisplayDevice?: boolean;
+  zeroSettingMechanisms?: PrismaZeroSettingMechanism[];
 }
 
 export type InstrumentUpdatePayload = Partial<InstrumentCreatePayload>;
@@ -92,6 +98,28 @@ function decimalValue(body: Payload, field: string, result: ValidationResult): s
     return undefined;
   }
   return parsed.value;
+}
+
+function enumArray<T extends string>(
+  body: Payload,
+  field: string,
+  values: readonly T[],
+  result: ValidationResult
+): T[] | undefined {
+  const value = body[field];
+  if (!Array.isArray(value)) {
+    result.add(field, 'must be an array');
+    return undefined;
+  }
+  const array: T[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || !values.includes(item as T)) {
+      result.add(field, `elements must be one of: ${values.join(', ')}`);
+      return undefined;
+    }
+    array.push(item as T);
+  }
+  return array;
 }
 
 /**
@@ -190,6 +218,15 @@ function optionalFields(body: Payload, data: InstrumentUpdatePayload, result: Va
     if (value !== undefined) data.instrumentType = value;
   }
 
+  if (has(body, 'indicationType')) {
+    if (body.indicationType === null) {
+      data.indicationType = null;
+    } else {
+      const value = enumValue(body, 'indicationType', INSTRUMENT_INDICATION_TYPES, result);
+      if (value !== undefined) data.indicationType = value;
+    }
+  }
+
   if (has(body, 'numberOfSupportPoints')) {
     const value = supportPoints(body, result);
     if (value !== undefined) data.numberOfSupportPoints = value;
@@ -208,7 +245,19 @@ function optionalFields(body: Payload, data: InstrumentUpdatePayload, result: Va
 
   if (has(body, 'initialZeroSettingRange')) {
     const value = decimalValue(body, 'initialZeroSettingRange', result);
-    if (value !== undefined) data.initialZeroSettingRange = value;
+    if (value !== undefined) {
+      const num = Number(value);
+      if (num < 0 || num > 1) {
+        result.add('initialZeroSettingRange', 'must be a fraction of Max between 0 and 1 (e.g. 0.20 for 20%)');
+      } else {
+        data.initialZeroSettingRange = value;
+      }
+    }
+  }
+
+  if (has(body, 'zeroSettingMechanisms')) {
+    const value = enumArray(body, 'zeroSettingMechanisms', ZERO_SETTING_MECHANISMS, result);
+    if (value !== undefined) data.zeroSettingMechanisms = value;
   }
 }
 

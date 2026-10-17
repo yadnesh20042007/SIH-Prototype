@@ -19,13 +19,110 @@ export interface EccentricityPositionResult extends ObservationComplianceResult 
 export interface EccentricityTestResult extends TestComplianceResult {
   observationResults: EccentricityPositionResult[];
   retestRequired: boolean;
+  prescribedLoad: number;
+  completeness: EccentricCompletenessResult;
 }
 
 /**
  * Fixes typical JavaScript floating point inaccuracies for display and comparison.
  */
-function fixFloat(val: number): number {
+export function fixFloat(val: number): number {
   return Math.round(val * 1e8) / 1e8;
+}
+
+export interface EccentricLoadValidationResult {
+  isValid: boolean;
+  error?: string;
+}
+
+/**
+ * Validates an applied eccentric test load against instrument Max capacity
+ * and the prescribed test load per OIML R 76-1:2006 clause 3.6.2.1:
+ * L_prescribed = 1/3 * (Max + maximum additive tare effect).
+ *
+ * Rules:
+ * 1. Applied load cannot be negative or zero.
+ * 2. Applied load must not exceed instrument Max capacity.
+ * 3. Applied load must match the prescribed load within scale interval / weight tolerance (no arbitrary tolerance).
+ */
+export function validateEccentricLoad(
+  load: number | undefined | null,
+  instrument: { max?: number; e?: number; additiveTareEffect?: boolean }
+): EccentricLoadValidationResult {
+  if (load === undefined || load === null || typeof load !== 'number' || !Number.isFinite(load)) {
+    return { isValid: false, error: 'Applied eccentric test load must be a valid finite number.' };
+  }
+  if (load <= 0) {
+    return { isValid: false, error: 'Applied eccentric test load must be greater than zero.' };
+  }
+  if (instrument.max !== undefined && fixFloat(load) > fixFloat(instrument.max)) {
+    return {
+      isValid: false,
+      error: `Applied eccentric load ${load} kg exceeds instrument Max capacity (${instrument.max} kg).`,
+    };
+  }
+  if (instrument.max !== undefined) {
+    const prescribedLoad = fixFloat(instrument.max / 3);
+    const e = instrument.e ?? 0;
+    // OIML R 76 does not permit arbitrary tolerances (e.g. +/-10%). Standard weight representation allows within verification scale interval e.
+    const tolerance = Math.max(1e-6, e);
+    if (Math.abs(fixFloat(load) - prescribedLoad) > tolerance) {
+      return {
+        isValid: false,
+        error: `Applied eccentric load ${load} kg does not match prescribed test load ${prescribedLoad} kg (1/3 Max per OIML R 76-1 clause 3.6.2.1).`,
+      };
+    }
+  }
+  return { isValid: true };
+}
+
+/**
+ * Validates a string or numeric eccentric load input against instrument Max and prescribed load.
+ */
+export function validateEccentricLoadInput(
+  rawLoad: string | number | undefined | null,
+  instrument?: { max?: number; e?: number; additiveTareEffect?: boolean }
+): EccentricLoadValidationResult {
+  if (rawLoad === undefined || rawLoad === null) {
+    return { isValid: false, error: 'Eccentric test load is required.' };
+  }
+  if (typeof rawLoad === 'string') {
+    const trimmed = rawLoad.trim();
+    if (trimmed === '') {
+      return { isValid: false, error: 'Eccentric test load is required.' };
+    }
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) {
+      return { isValid: false, error: 'Eccentric test load must be a valid number.' };
+    }
+    return validateEccentricLoad(parsed, instrument ?? {});
+  }
+  return validateEccentricLoad(rawLoad, instrument ?? {});
+}
+
+/**
+ * Calculates the prescribed eccentric test load according to OIML R 76-1:2006 clause 3.6.2.1:
+ * L_prescribed = 1/3 * (Max + maximum additive tare effect).
+ */
+export function calculatePrescribedEccentricLoad(instrument: Instrument): number {
+  return fixFloat(instrument.max / 3);
+}
+
+/**
+ * Checks whether a single eccentric loading observation is structurally and metrologically valid.
+ */
+export function isEccentricObservationValid(
+  obs: EccentricLoadingObservation,
+  instrument: Instrument
+): boolean {
+  if (!obs) return false;
+  if (!obs.positionId || String(obs.positionId).trim().length === 0) return false;
+  const loadCheck = validateEccentricLoad(obs.appliedLoad, instrument);
+  if (!loadCheck.isValid) return false;
+  if (obs.indicatedValue === undefined || obs.indicatedValue === null || !Number.isFinite(obs.indicatedValue)) return false;
+  if (obs.additionalLoad === undefined || obs.additionalLoad === null || !Number.isFinite(obs.additionalLoad)) return false;
+  if (obs.zeroError === undefined || obs.zeroError === null || !Number.isFinite(obs.zeroError)) return false;
+  return true;
 }
 
 /**
@@ -49,6 +146,12 @@ export function evaluateEccentricPosition(
     throw new Error('additionalLoad (ΔL) is required for error calculation but was not provided. Cannot silently assume zero.');
   }
 
+  // Validate applied eccentric load against capacity and prescribed test load per OIML R 76-1 clause 3.6.2.1
+  const loadCheck = validateEccentricLoad(obs.appliedLoad, instrument);
+  if (!loadCheck.isValid) {
+    throw new Error(`Eccentric loading test position ${obs.positionId} (applied load: ${obs.appliedLoad} kg): ${loadCheck.error}`);
+  }
+
   const { appliedLoad: L, indicatedValue: I, additionalLoad: deltaL, zeroError: E0, positionId } = obs;
   const e = instrument.e;
 
@@ -62,7 +165,13 @@ export function evaluateEccentricPosition(
   const Ec = fixFloat(E - E0);
   
   // MPE
-  const mpeResult = calculateMPE(instrument.accuracyClass, L, e, context);
+  let mpeResult;
+  try {
+    mpeResult = calculateMPE(instrument.accuracyClass, L, e, context);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    throw new Error(`Eccentric loading test position ${obs.positionId} (applied load: ${L} kg): ${msg}`);
+  }
   const mpe = mpeResult.effectiveMPE;
   
   // PASS ⇔ |Ec| ≤ effective MPE
@@ -193,22 +302,138 @@ export function evaluateEccentricPosition(
   };
 }
 
+export interface EccentricCompletenessResult {
+  isComplete: boolean;
+  prescribedLoad: number;
+  requiredPositionsCount: number;
+  testedPositionsCount: number;
+  missingPositionsCount: number;
+  testedPositions: string[];
+  missingPositions: string[];
+  clause: string;
+  message?: string;
+}
+
+/**
+ * Verifies whether all required eccentric loading positions have been tested
+ * for the given instrument configuration per OIML R76-1 clause 3.6.2 and Annex A.4.7.
+ */
+export function checkEccentricCompleteness(
+  observations: EccentricLoadingObservation[],
+  instrument: Instrument
+): EccentricCompletenessResult {
+  const points = instrument.numberOfSupportPoints;
+  const requiredPositionsCount = points === 3 ? 3 : 4;
+  const prescribedLoad = calculatePrescribedEccentricLoad(instrument);
+  const clause = points === 3
+    ? 'OIML R 76-1:2006 clause 3.6.2.1 / A.4.7.1 (3 support points)'
+    : 'OIML R 76-1:2006 clause 3.6.2.1 / A.4.7.1 (quarter segments for <= 4 support points)';
+
+  // Only valid observations count toward completeness; empty or invalid observations are excluded
+  const validObservations = observations.filter(o => isEccentricObservationValid(o, instrument));
+  const invalidObservations = observations.filter(o => !isEccentricObservationValid(o, instrument));
+
+  const testedPositions = validObservations
+    .map(o => String(o.positionId ?? '').trim())
+    .filter(id => id.length > 0);
+
+  const uniqueTested = Array.from(new Set(testedPositions.map(id => id.toLowerCase())));
+  const testedPositionsCount = uniqueTested.length;
+  const missingPositionsCount = Math.max(0, requiredPositionsCount - testedPositionsCount);
+
+  if (missingPositionsCount === 0 && invalidObservations.length === 0) {
+    return {
+      isComplete: true,
+      prescribedLoad,
+      requiredPositionsCount,
+      testedPositionsCount,
+      missingPositionsCount: 0,
+      testedPositions,
+      missingPositions: [],
+      clause,
+    };
+  }
+
+  const expectedStandardIds = Array.from({ length: requiredPositionsCount }, (_, i) => String(i + 1));
+  const missingPositions: string[] = [];
+
+  for (const expected of expectedStandardIds) {
+    const isTested = uniqueTested.some(id => {
+      return (
+        id === expected ||
+        id === `position-${expected}` ||
+        id === `pos-${expected}` ||
+        id === `pos${expected}` ||
+        id === `quarter-${expected}` ||
+        id === `quarter ${expected}`
+      );
+    });
+    if (!isTested) {
+      missingPositions.push(expected);
+    }
+  }
+
+  while (missingPositions.length < missingPositionsCount) {
+    const nextNum = missingPositions.length + 1;
+    missingPositions.push(String(nextNum));
+  }
+
+  const invalidDetails = invalidObservations.map((obs) => {
+    const loadVal = validateEccentricLoad(obs?.appliedLoad, instrument);
+    if (!loadVal.isValid) {
+      return `Position ${obs?.positionId ?? 'unknown'}: ${loadVal.error}`;
+    }
+    return `Position ${obs?.positionId ?? 'unknown'} has invalid observation data`;
+  });
+
+  let message = `Incomplete eccentric loading test: Instrument has ${points || 4} support points requiring ${requiredPositionsCount} loading positions (${clause}). Prescribed test load: ${prescribedLoad} kg (1/3 Max). Only ${testedPositionsCount} distinct valid position(s) tested.`;
+  if (missingPositionsCount > 0) {
+    message += ` Missing ${missingPositionsCount} required position(s): ${missingPositions.map(p => `Position ${p}`).join(', ')}.`;
+  }
+  if (invalidDetails.length > 0) {
+    message += ` Invalid observation(s): ${invalidDetails.join('; ')}.`;
+  }
+
+  return {
+    isComplete: false,
+    prescribedLoad,
+    requiredPositionsCount,
+    testedPositionsCount,
+    missingPositionsCount,
+    testedPositions,
+    missingPositions,
+    clause,
+    message,
+  };
+}
+
 /**
  * Evaluates an entire eccentric loading test across all supported positions.
+ *
+ * Precedence rules:
+ * - If any position exceeds MPE and cannot be retested: FAIL.
+ * - If any position requires retest (and no fail): REQUIRES_RETEST.
+ * - If all evaluated positions pass but procedure is incomplete: INCOMPLETE (or throws when requireComplete).
+ * - PASS only when all required positions are tested and within MPE.
  */
 export function evaluateEccentricLoadingTest(
   observations: EccentricLoadingObservation[],
   instrument: Instrument,
   context: VerificationContext,
-  zeroDeterminedBeforeEachLoading: boolean = false
+  zeroDeterminedBeforeEachLoading: boolean = false,
+  requireComplete: boolean = true
 ): EccentricityTestResult {
   if (observations.length === 0) {
     throw new Error('No observations provided for eccentric loading test.');
   }
 
+  const prescribedLoad = calculatePrescribedEccentricLoad(instrument);
+
   const observationResults = observations.map(obs => 
     evaluateEccentricPosition(obs, instrument, context, zeroDeterminedBeforeEachLoading)
   );
+
+  const completeness = checkEccentricCompleteness(observations, instrument);
 
   let overallOutcome = TestOutcome.Pass;
   let retestRequired = false;
@@ -230,12 +455,23 @@ export function evaluateEccentricLoadingTest(
     }
   }
 
+  // Prevent an unsupported PASS when required positions have not been tested
+  if (overallOutcome === TestOutcome.Pass && !completeness.isComplete) {
+    if (requireComplete) {
+      throw new Error(completeness.message);
+    } else {
+      overallOutcome = TestOutcome.Incomplete;
+    }
+  }
+
   return {
     outcome: overallOutcome,
     maxAbsoluteError,
     observationResults,
     retestRequired,
+    prescribedLoad,
+    completeness,
     r76Reference: 'R76-1 (2006) clause 3.6.2, A.4.7',
-    explanation: `Eccentric loading test overall outcome: ${overallOutcome.toUpperCase()}. Max absolute error: ${maxAbsoluteError} kg.`
+    explanation: `Eccentric loading test overall outcome: ${overallOutcome.toUpperCase()}. Prescribed test load: ${prescribedLoad} kg. Max absolute error: ${maxAbsoluteError} kg.`
   };
 }

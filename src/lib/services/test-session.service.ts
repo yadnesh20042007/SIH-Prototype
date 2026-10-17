@@ -22,6 +22,7 @@ export interface TestSessionRecord {
   technicianId: string;
   reviewerId: string | null;
   approverId: string | null;
+  revisionNumber: number;
   notes: string | null;
   createdAt: string;
   updatedAt: string;
@@ -57,6 +58,7 @@ function toTestSessionRecord(session: TestSession): TestSessionRecord {
     instrumentId: session.instrumentId,
     verificationContext: session.verificationContext,
     status: session.status,
+    revisionNumber: session.revisionNumber,
     rulesetVersionId: session.rulesetVersionId,
     technicianId: session.technicianId,
     reviewerId: session.reviewerId,
@@ -160,6 +162,37 @@ export async function startTestSessionProgress(id: string): Promise<TestSessionR
     throw new DatabaseConflictError(
       `TestSession cannot enter IN_PROGRESS while it is ${session.status}`
     );
+  } catch (error) {
+    throwMappedDatabaseError(error, 'TestSession');
+  }
+}
+
+export async function deleteTestSession(id: string, actorId: string): Promise<void> {
+  try {
+    const session = await prisma.testSession.findUnique({ where: { id } });
+    if (!session) throw new DatabaseNotFoundError('TestSession not found');
+
+    if (session.status === 'APPROVED' || session.status === 'PENDING_APPROVAL') {
+      throw new DatabaseConflictError(`Cannot delete session with status ${session.status}`);
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.approval.deleteMany({ where: { sessionId: id } });
+      await tx.report.deleteMany({ where: { sessionId: id } });
+      
+      await tx.auditLog.updateMany({ where: { sessionId: id }, data: { sessionId: null } });
+
+      await tx.auditLog.create({
+        data: {
+          entityType: 'TestSession',
+          entityId: id,
+          action: 'DELETE',
+          userId: actorId,
+        },
+      });
+
+      await tx.testSession.delete({ where: { id } });
+    });
   } catch (error) {
     throwMappedDatabaseError(error, 'TestSession');
   }

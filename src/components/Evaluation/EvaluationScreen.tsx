@@ -1,13 +1,16 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
+  IndicationType,
   InstrumentType,
   VerificationContext,
   type Instrument,
 } from '@/lib/r76/types';
+import { selectTests, type TestSelectionResult } from '@/lib/r76/test-selection';
+import { TestType } from '@/lib/r76/types';
 
 import type {
   TestObservations,
@@ -16,8 +19,11 @@ import type {
 
 import { InstrumentSection } from './InstrumentSection';
 import { WeighingPerformanceSection } from './WeighingPerformanceSection';
+import { validateWeighingLoadInput } from '@/lib/r76/calculations/weighing';
 import { RepeatabilitySection } from './RepeatabilitySection';
 import { EccentricLoadingSection } from './EccentricLoadingSection';
+import { DiscriminationSection } from './DiscriminationSection';
+import { ZeroSettingSection } from './ZeroSettingSection';
 import { ResultsSection } from './ResultsSection';
 import { ReportActions } from '@/components/Reports/ReportActions';
 import {
@@ -30,11 +36,18 @@ import {
   createDefaultRepeatability,
   createWeighingRow,
   createEccentricRow,
+  createDiscriminationRow,
+  createDefaultZeroSetting,
+  generateRowId,
   parseNum,
+  normalizeVerificationContext,
+  getVerificationContextLabel,
   type InstrumentFormState,
   type WeighingRowState,
   type RepeatabilityFormState,
   type EccentricRowState,
+  type DiscriminationRowState,
+  type ZeroSettingFormState,
 } from './types';
 
 interface SavedInstrumentResponse {
@@ -44,6 +57,7 @@ interface SavedInstrumentResponse {
   serialNumber: string | null;
   accuracyClass: InstrumentFormState['accuracyClass'];
   instrumentType: InstrumentFormState['instrumentType'];
+  indicationType?: 'DIGITAL' | 'ANALOG' | 'digital' | 'analog' | null;
   max: string;
   min: string;
   e: string;
@@ -54,12 +68,14 @@ interface SavedInstrumentResponse {
   hasInitialZeroSettingDevice: boolean;
   initialZeroSettingRange: string;
   hasFineDisplayDevice: boolean;
+  zeroSettingMechanisms: string[];
 }
 
 interface SavedTestSessionResponse {
   id: string;
   instrumentId: string;
   verificationContext:
+    | 'TYPE_EVALUATION'
     | 'INITIAL_VERIFICATION'
     | 'SUBSEQUENT_VERIFICATION'
     | 'SERVICE_INSPECTION';
@@ -70,14 +86,15 @@ interface SavedTestSessionResponse {
     | 'PENDING_APPROVAL'
     | 'APPROVED'
     | 'REJECTED'
-    | 'CANCELLED';
+    | 'CANCELLED'
+    | 'RETURNED';
   rulesetVersionId: string;
 }
 
 interface SavedTestObservationResponse {
   id: string;
   sessionId: string;
-  testType: 'WEIGHING_PERFORMANCE' | 'REPEATABILITY' | 'ECCENTRIC_LOADING';
+  testType: 'WEIGHING_PERFORMANCE' | 'REPEATABILITY' | 'ECCENTRIC_LOADING' | 'DISCRIMINATION' | 'ZERO_SETTING_ACCURACY';
   sequenceIndex: number;
   observationData: Record<string, unknown>;
   createdAt: string;
@@ -87,12 +104,16 @@ interface ObservationIds {
   weighing: Record<string, string>;
   repeatability: string | null;
   eccentric: Record<string, string>;
+  discrimination: Record<string, string>;
+  zeroSetting: string | null;
 }
 
 const EMPTY_OBSERVATION_IDS: ObservationIds = {
   weighing: {},
   repeatability: null,
   eccentric: {},
+  discrimination: {},
+  zeroSetting: null,
 };
 
 interface EvaluationScreenProps {
@@ -101,6 +122,7 @@ interface EvaluationScreenProps {
 }
 
 const VERIFICATION_CONTEXT_BY_SESSION = {
+  TYPE_EVALUATION: VerificationContext.TypeEvaluation,
   INITIAL_VERIFICATION: VerificationContext.InitialVerification,
   SUBSEQUENT_VERIFICATION: VerificationContext.SubsequentVerification,
   SERVICE_INSPECTION: VerificationContext.ServiceInspection,
@@ -139,6 +161,16 @@ async function persistObservation(
   return payload as SavedTestObservationResponse;
 }
 
+async function deletePersistedObservation(id: string): Promise<void> {
+  const response = await fetch(`/api/test-observations/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok && response.status !== 404) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(observationError(payload, response.status));
+  }
+}
+
 async function fetchFreshness(sessionId: string): Promise<{
   testType: StoredTestType; state: string; evaluatedObservationFingerprint: string | null;
 }[]> {
@@ -149,11 +181,44 @@ async function fetchFreshness(sessionId: string): Promise<{
   }
 
 
-export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenProps) {
-  const idCounter = useRef(0);
-  const configurationEdited = useRef(false);
+/**
+ * Shown in place of a test-entry section when the test-selection engine
+ * has determined that the test does not apply to the current instrument.
+ * Displays the engine's reason and R76 reference so the technician
+ * understands why the section is absent.
+ */
+function NotApplicableBanner({
+  testName,
+  reason,
+  r76Reference,
+}: {
+  testName: string;
+  reason: string;
+  r76Reference?: string;
+}) {
+  return (
+    <div
+      role="note"
+      aria-label={`${testName} not applicable`}
+      className="rounded-[5px] border border-[#D9E2EC] bg-[#F9FBFC] px-4 py-3 text-[0.76rem] text-[#344054]"
+    >
+      <span className="font-bold text-[#344054]">{testName}</span>
+      <span className="ml-2 rounded-full bg-[#E5E7EB] px-2 py-0.5 text-[0.66rem] font-bold uppercase tracking-[0.07em] text-[#667085]">
+        Not applicable
+      </span>
+      <p className="mt-1.5 text-[0.73rem] text-[#667085]">{reason}</p>
+      {r76Reference && (
+        <p className="mt-0.5 text-[0.68rem] text-[#98A2B3]">
+          Reference: {r76Reference}
+        </p>
+      )}
+    </div>
+  );
+}
 
-  const nextId = () => String(idCounter.current++);
+export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenProps) {
+
+  const configurationEdited = useRef(false);
 
   const [instrument, setInstrument] =
     useState<InstrumentFormState>(
@@ -168,8 +233,8 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
   );
 
   const [weighingRows, setWeighingRows] =
-    useState<WeighingRowState[]>([
-      createWeighingRow('w-0'),
+    useState<WeighingRowState[]>(() => [
+      createWeighingRow(),
     ]);
 
   const [repeatability, setRepeatability] =
@@ -178,12 +243,22 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
     );
 
   const [eccentricRows, setEccentricRows] =
-    useState<EccentricRowState[]>([
+    useState<EccentricRowState[]>(() => [
       createEccentricRow(
-        'e-0',
+        undefined,
         'position-1'
       ),
     ]);
+
+  const [discriminationRows, setDiscriminationRows] =
+    useState<DiscriminationRowState[]>(() => [
+      createDiscriminationRow(undefined, ''),
+    ]);
+
+  const [zeroSetting, setZeroSetting] =
+    useState<ZeroSettingFormState>(
+      createDefaultZeroSetting()
+    );
 
   const [
     eccentricZeroDetermined,
@@ -217,6 +292,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
   const [resultIntegrityError, setResultIntegrityError] = useState<string | null>(null);
   const [resultsStale, setResultsStale] = useState(false);
   const [submittingReview, setSubmittingReview] = useState(false);
+  const [approvals, setApprovals] = useState<Array<{ id: string, action: string, comments: string | null, createdAt: string, user: { name: string, role: string } }>>([]);
   const [workflowMessage, setWorkflowMessage] = useState<{
     tone: 'error' | 'success';
     text: string;
@@ -234,7 +310,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           throw new Error('A valid test session is required to open the evaluation workspace.');
         }
 
-        const [instrumentResponse, sessionResponse, observationsResponse, resultsResponse] = await Promise.all([
+        const [instrumentResponse, sessionResponse, observationsResponse, resultsResponse, approvalsResponse] = await Promise.all([
           fetch(`/api/instruments/${encodeURIComponent(instrumentId)}`, {
             signal: controller.signal,
           }),
@@ -247,6 +323,9 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           fetch(`/api/test-results?testSessionId=${encodeURIComponent(sessionId)}`, {
             signal: controller.signal,
           }),
+          fetch(`/api/approvals?testSessionId=${encodeURIComponent(sessionId)}`, {
+            signal: controller.signal,
+          }),
         ]);
         const data = (await instrumentResponse.json()) as SavedInstrumentResponse & {
           error?: string;
@@ -256,6 +335,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
         };
         const observationsData = await observationsResponse.json();
         const resultsData = await resultsResponse.json();
+        const approvalsData = await approvalsResponse.json();
         if (!instrumentResponse.ok) {
           throw new Error(
             typeof data.error === 'string'
@@ -276,6 +356,9 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
         if (!resultsResponse.ok) {
           throw new Error(observationError(resultsData, resultsResponse.status));
         }
+        if (!approvalsResponse.ok) {
+          throw new Error(observationError(approvalsData, approvalsResponse.status));
+        }
         if (sessionData.instrumentId !== instrumentId) {
           throw new Error('This test session does not belong to the selected instrument.');
         }
@@ -287,6 +370,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           serialNumber: data.serialNumber ?? '',
           accuracyClass: data.accuracyClass,
           instrumentType: data.instrumentType,
+          indicationType: data.indicationType ?? undefined,
           max: data.max,
           min: data.min,
           e: data.e,
@@ -297,15 +381,18 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           hasInitialZeroSettingDevice: data.hasInitialZeroSettingDevice,
           initialZeroSettingRange: data.initialZeroSettingRange,
           hasFineDisplayDevice: data.hasFineDisplayDevice,
+          zeroSettingMechanisms: data.zeroSettingMechanisms ?? [],
         });
         setSession(sessionData);
         setVerificationContext(
-          VERIFICATION_CONTEXT_BY_SESSION[sessionData.verificationContext]
+          normalizeVerificationContext(sessionData.verificationContext)
         );
         const observations = observationsData as SavedTestObservationResponse[];
         const weighing = observations.filter(({ testType }) => testType === 'WEIGHING_PERFORMANCE');
         const repeatabilityRecords = observations.filter(({ testType }) => testType === 'REPEATABILITY');
         const eccentric = observations.filter(({ testType }) => testType === 'ECCENTRIC_LOADING');
+        const discrimination = observations.filter(({ testType }) => testType === 'DISCRIMINATION');
+        const zeroSettingRecords = observations.filter(({ testType }) => testType === 'ZERO_SETTING_ACCURACY');
         if (new Set(weighing.map(({ sequenceIndex }) => sequenceIndex)).size !== weighing.length) {
           throw new Error('Conflicting weighing observations require manual review.');
         }
@@ -323,7 +410,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           throw new Error('Conflicting eccentric-loading observations require manual review.');
         }
 
-        const loadedIds: ObservationIds = { weighing: {}, repeatability: null, eccentric: {} };
+        const loadedIds: ObservationIds = { weighing: {}, repeatability: null, eccentric: {}, discrimination: {}, zeroSetting: null };
         const loadedWeighing = weighing.map((record) => {
           const rowId = `w-${record.id}`;
           loadedIds.weighing[rowId] = record.id;
@@ -339,11 +426,28 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
         const repeatabilityRecord = repeatabilityRecords[0];
         const loadedRepeatability = repeatabilityRecord
           ? {
-              testLoad: String(repeatabilityRecord.observationData.testLoad),
-              indications: (repeatabilityRecord.observationData.indications as number[]).map(String),
+              testLoad: String(repeatabilityRecord.observationData.testLoad ?? ''),
+              indications: Array.isArray(repeatabilityRecord.observationData.indications)
+                ? (repeatabilityRecord.observationData.indications as number[]).map(String)
+                : ['', '', ''],
               autoZeroOrTrackingActive: Boolean(
                 repeatabilityRecord.observationData.autoZeroOrTrackingActive
               ),
+              ...(Array.isArray(repeatabilityRecord.observationData.series)
+                ? {
+                    series: (
+                      repeatabilityRecord.observationData.series as Array<{
+                        seriesNumber: number;
+                        testLoad: number;
+                        indications: number[];
+                      }>
+                    ).map((s) => ({
+                      seriesNumber: s.seriesNumber,
+                      testLoad: String(s.testLoad),
+                      indications: Array.isArray(s.indications) ? s.indications.map(String) : [],
+                    })),
+                  }
+                : {}),
             }
           : createDefaultRepeatability();
         if (repeatabilityRecord) loadedIds.repeatability = repeatabilityRecord.id;
@@ -362,9 +466,31 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
             ),
           };
         });
-        setWeighingRows(loadedWeighing.length ? loadedWeighing : [createWeighingRow('w-0')]);
+        const loadedDiscrimination = discrimination.map((record) => {
+          const rowId = `d-${record.id}`;
+          loadedIds.discrimination[rowId] = record.id;
+          return {
+            id: rowId,
+            testLoad: String(record.observationData.testLoad),
+            indicationBefore: String(record.observationData.indicationBefore),
+            indicationAfter: String(record.observationData.indicationAfter),
+          };
+        });
+        const zeroSettingRecord = zeroSettingRecords[0];
+        const loadedZeroSetting = zeroSettingRecord
+          ? {
+              load: String(zeroSettingRecord.observationData.load),
+              indicatedValue: String(zeroSettingRecord.observationData.indicatedValue),
+              additionalLoad: String(zeroSettingRecord.observationData.additionalLoad ?? 0),
+            }
+          : createDefaultZeroSetting();
+        if (zeroSettingRecord) loadedIds.zeroSetting = zeroSettingRecord.id;
+
+        setWeighingRows(loadedWeighing.length ? loadedWeighing : [createWeighingRow()]);
         setRepeatability(loadedRepeatability);
-        setEccentricRows(loadedEccentric.length ? loadedEccentric : [createEccentricRow('e-0', 'position-1')]);
+        setEccentricRows(loadedEccentric.length ? loadedEccentric : [createEccentricRow(undefined, 'position-1')]);
+        setDiscriminationRows(loadedDiscrimination.length ? loadedDiscrimination : [createDiscriminationRow(undefined, '')]);
+        setZeroSetting(loadedZeroSetting);
         setObservationIds(loadedIds);
         const storedResults = resultsData as SavedTestResultResponse[];
         const resultCounts = new Map<StoredTestType, number>();
@@ -392,6 +518,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
               item.evaluatedObservationFingerprint === record.evaluatedObservationFingerprint)
           ));
         }
+        setApprovals(approvalsData);
         setEccentricZeroDetermined(Boolean(eccentric[0]?.observationData.zeroDeterminedBeforeEachLoading));
         setResult(null);
         setError(null);
@@ -412,32 +539,60 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
     return () => controller.abort();
   }, [instrumentId, sessionId]);
 
-  async function saveProgress(): Promise<boolean> {
+  async function saveProgress(): Promise<{ success: boolean; error?: string }> {
     setSavingObservations(true);
     setSaveMessage(null);
     const nextIds: ObservationIds = {
       weighing: { ...observationIds.weighing },
       repeatability: observationIds.repeatability,
       eccentric: { ...observationIds.eccentric },
+      discrimination: { ...observationIds.discrimination },
+      zeroSetting: observationIds.zeroSetting,
     };
     let savedCount = 0;
 
     try {
-      if (Object.keys(nextIds.weighing).some(id => !weighingRows.some(row => row.id === id)) ||
-        Object.keys(nextIds.eccentric).some(id => !eccentricRows.some(row => row.id === id))) {
-        throw new Error('Saved observation rows cannot be removed here. Reload to restore them before saving.');
+      // Delete any removed weighing observations from backend
+      for (const [rowId, dbId] of Object.entries(nextIds.weighing)) {
+        if (!weighingRows.some((row) => row.id === rowId)) {
+          await deletePersistedObservation(dbId);
+          delete nextIds.weighing[rowId];
+        }
+      }
+
+      // Delete any removed eccentric observations from backend
+      for (const [rowId, dbId] of Object.entries(nextIds.eccentric)) {
+        if (!eccentricRows.some((row) => row.id === rowId)) {
+          await deletePersistedObservation(dbId);
+          delete nextIds.eccentric[rowId];
+        }
+      }
+
+      // Delete any removed discrimination observations from backend
+      for (const [rowId, dbId] of Object.entries(nextIds.discrimination)) {
+        if (!discriminationRows.some((row) => row.id === rowId)) {
+          await deletePersistedObservation(dbId);
+          delete nextIds.discrimination[rowId];
+        }
       }
       for (const [index, row] of weighingRows.entries()) {
         if (row.load.trim() === '' && row.indicatedValue.trim() === '') {
           if (nextIds.weighing[row.id]) throw new Error('A saved weighing row cannot be cleared; restore its values before saving.');
           continue;
         }
+        const loadVal = validateWeighingLoadInput(row.load, {
+          min: Number(instrument.min) || undefined,
+          max: Number(instrument.max) || undefined,
+        });
+        if (!loadVal.isValid) {
+          throw new Error(`Weighing performance observation ${index + 1}: ${loadVal.error}`);
+        }
         const observationData = {
           sequenceIndex: index,
-          load: parseNum(row.load),
-          indicatedValue: parseNum(row.indicatedValue),
-          additionalLoad: parseNum(row.additionalLoad),
-          zeroError: parseNum(row.zeroError),
+          load: parseNum(row.load, `Weighing test load (row ${index + 1})`),
+          indicatedValue: parseNum(row.indicatedValue, `Weighing indicated value (row ${index + 1})`),
+          additionalLoad: parseNum(row.additionalLoad, `Weighing additional load (row ${index + 1})`),
+          zeroError: parseNum(row.zeroError, `Weighing zero error (row ${index + 1})`),
           loadingDirection: row.loadingDirection,
         };
         const existingId = nextIds.weighing[row.id];
@@ -449,17 +604,36 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           weighing: { ...nextIds.weighing },
           repeatability: nextIds.repeatability,
           eccentric: { ...nextIds.eccentric },
+          discrimination: { ...nextIds.discrimination },
+          zeroSetting: nextIds.zeroSetting,
         });
         savedCount += 1;
       }
 
       const hasRepeatability = repeatability.testLoad.trim() !== '' ||
-        repeatability.indications.some((value) => value.trim() !== '');
+        repeatability.indications.some((value) => value.trim() !== '') ||
+        Boolean(repeatability.series && repeatability.series.length > 0);
       if (hasRepeatability) {
         const observationData = {
-          testLoad: parseNum(repeatability.testLoad),
-          indications: repeatability.indications.map(parseNum),
+          testLoad: parseNum(
+            repeatability.testLoad || (repeatability.series?.[0]?.testLoad ?? '0'),
+            'Repeatability test load'
+          ),
+          indications: repeatability.indications.map((val, i) =>
+            parseNum(val, `Repeatability indication ${i + 1}`)
+          ),
           autoZeroOrTrackingActive: repeatability.autoZeroOrTrackingActive,
+          ...(repeatability.series && repeatability.series.length > 0
+            ? {
+                series: repeatability.series.map((s) => ({
+                  seriesNumber: s.seriesNumber,
+                  testLoad: parseNum(s.testLoad, `Series ${s.seriesNumber} test load`),
+                  indications: s.indications.map((val, i) =>
+                    parseNum(val, `Series ${s.seriesNumber} indication ${i + 1}`)
+                  ),
+                })),
+              }
+            : {}),
         };
         const existingId = nextIds.repeatability ?? undefined;
         const saved = await persistObservation(existingId, existingId
@@ -470,6 +644,8 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           weighing: { ...nextIds.weighing },
           repeatability: nextIds.repeatability,
           eccentric: { ...nextIds.eccentric },
+          discrimination: { ...nextIds.discrimination },
+          zeroSetting: nextIds.zeroSetting,
         });
         savedCount += 1;
       } else if (nextIds.repeatability) {
@@ -483,10 +659,10 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
         }
         const observationData = {
           positionId: row.positionId,
-          appliedLoad: parseNum(row.appliedLoad),
-          indicatedValue: parseNum(row.indicatedValue),
-          additionalLoad: parseNum(row.additionalLoad),
-          zeroError: parseNum(row.zeroError),
+          appliedLoad: parseNum(row.appliedLoad, `Eccentric test load (${row.positionId || `row ${index + 1}`})`),
+          indicatedValue: parseNum(row.indicatedValue, `Eccentric indicated value (${row.positionId || `row ${index + 1}`})`),
+          additionalLoad: parseNum(row.additionalLoad, `Eccentric additional load (${row.positionId || `row ${index + 1}`})`),
+          zeroError: parseNum(row.zeroError, `Eccentric zero error (${row.positionId || `row ${index + 1}`})`),
           autoZeroOrTrackingDisabled: row.autoZeroOrTrackingDisabled,
           zeroDeterminedBeforeEachLoading: eccentricZeroDetermined,
         };
@@ -499,12 +675,61 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           weighing: { ...nextIds.weighing },
           repeatability: nextIds.repeatability,
           eccentric: { ...nextIds.eccentric },
+          discrimination: { ...nextIds.discrimination },
+          zeroSetting: nextIds.zeroSetting,
         });
         savedCount += 1;
       }
 
-      if (savedCount === 0) {
-        throw new Error('Enter at least one complete observation before saving progress.');
+      for (const [index, row] of discriminationRows.entries()) {
+        if (row.testLoad.trim() === '' && row.indicationBefore.trim() === '' && row.indicationAfter.trim() === '') {
+          if (nextIds.discrimination[row.id]) throw new Error('A saved discrimination row cannot be cleared; restore its values before saving.');
+          continue;
+        }
+        const observationData = {
+          testLoad: parseNum(row.testLoad, `Discrimination test load (row ${index + 1})`),
+          indicationBefore: parseNum(row.indicationBefore, `Discrimination indication before (row ${index + 1})`),
+          indicationAfter: parseNum(row.indicationAfter, `Discrimination indication after (row ${index + 1})`),
+        };
+        const existingId = nextIds.discrimination[row.id];
+        const saved = await persistObservation(existingId, existingId
+          ? { sequenceIndex: index, observationData }
+          : { sessionId, testType: 'DISCRIMINATION', sequenceIndex: index, observationData });
+        nextIds.discrimination[row.id] = saved.id;
+        setObservationIds({
+          weighing: { ...nextIds.weighing },
+          repeatability: nextIds.repeatability,
+          eccentric: { ...nextIds.eccentric },
+          discrimination: { ...nextIds.discrimination },
+          zeroSetting: nextIds.zeroSetting,
+        });
+        savedCount += 1;
+      }
+
+      const hasZeroSetting = zeroSetting.load.trim() !== '' && zeroSetting.indicatedValue.trim() !== '';
+      if (hasZeroSetting) {
+        const observationData = {
+          load: parseNum(zeroSetting.load, 'Zero-setting test load'),
+          indicatedValue: parseNum(zeroSetting.indicatedValue, 'Zero-setting indicated value'),
+          additionalLoad: parseNum(zeroSetting.additionalLoad.trim() || '0', 'Zero-setting additional load'),
+        };
+        const existingId = nextIds.zeroSetting ?? undefined;
+        const saved = await persistObservation(existingId, existingId
+          ? { observationData }
+          : { sessionId, testType: 'ZERO_SETTING_ACCURACY', sequenceIndex: 0, observationData });
+        nextIds.zeroSetting = saved.id;
+        setObservationIds({
+          weighing: { ...nextIds.weighing },
+          repeatability: nextIds.repeatability,
+          eccentric: { ...nextIds.eccentric },
+          discrimination: { ...nextIds.discrimination },
+          zeroSetting: nextIds.zeroSetting,
+        });
+        savedCount += 1;
+      } else if (zeroSetting.load.trim() !== '' || zeroSetting.indicatedValue.trim() !== '') {
+        throw new Error('Both load and indicated value are required for zero-setting observation.');
+      } else if (nextIds.zeroSetting) {
+        throw new Error('Saved zero-setting observations cannot be cleared; restore their values before saving.');
       }
 
       if (session?.status === 'DRAFT') {
@@ -518,6 +743,41 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
         setSession(payload as SavedTestSessionResponse);
       }
 
+      let configSaved = false;
+      if (configurationEdited.current) {
+        const instResponse = await fetch(`/api/instruments/${encodeURIComponent(instrumentId)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: instrument.model.trim(),
+            serialNumber: instrument.serialNumber ? instrument.serialNumber.trim() || null : null,
+            accuracyClass: instrument.accuracyClass,
+            max: instrument.max,
+            min: instrument.min,
+            e: instrument.e,
+            d: instrument.d,
+            zeroSettingMechanisms: instrument.zeroSettingMechanisms,
+            indicationType: instrument.indicationType || null,
+            numberOfSupportPoints: Number(instrument.numberOfSupportPoints),
+            additiveTareEffect: instrument.additiveTareEffect,
+            hasAutoZeroOrTracking: instrument.hasAutoZeroOrTracking,
+            hasInitialZeroSettingDevice: instrument.hasInitialZeroSettingDevice,
+            initialZeroSettingRange: instrument.initialZeroSettingRange || '0',
+            hasFineDisplayDevice: instrument.hasFineDisplayDevice,
+          }),
+        });
+        const instPayload = await instResponse.json();
+        if (!instResponse.ok) {
+          throw new Error(observationError(instPayload, instResponse.status));
+        }
+        configurationEdited.current = false;
+        configSaved = true;
+      }
+
+      if (savedCount === 0 && !configSaved) {
+        throw new Error('Enter at least one complete observation before saving progress.');
+      }
+
       if (savedResults.length > 0) {
         const freshness = await fetchFreshness(sessionId);
         setResultsStale(configurationEdited.current || savedResults.some(record =>
@@ -527,13 +787,14 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
       }
 
       setSaveMessage({ tone: 'success', text: 'Observation progress saved.' });
-      return true;
+      return { success: true };
     } catch (saveError) {
+      const errorText = saveError instanceof Error ? saveError.message : 'Unable to save observation progress.';
       setSaveMessage({
         tone: 'error',
-        text: saveError instanceof Error ? saveError.message : 'Unable to save observation progress.',
+        text: errorText,
       });
-      return false;
+      return { success: false, error: errorText };
     } finally {
       setSavingObservations(false);
     }
@@ -548,9 +809,9 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
 
     try {
       if (resultIntegrityError) throw new Error(resultIntegrityError);
-      const observationsSaved = await saveProgress();
-      if (!observationsSaved) {
-        throw new Error('Evaluation stopped because the current observations could not be saved.');
+      const saveResult = await saveProgress();
+      if (!saveResult.success) {
+        throw new Error(saveResult.error || 'Evaluation stopped because the current observations could not be saved.');
       }
       if (instrument.instrumentType !== 'SINGLE_RANGE') {
         throw new Error(
@@ -559,7 +820,8 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
       }
 
       const supportPoints = parseNum(
-        instrument.numberOfSupportPoints
+        instrument.numberOfSupportPoints,
+        'Number of support points'
       );
 
       if (
@@ -569,6 +831,58 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
         throw new Error(
           'Number of support points must be a positive whole number.'
         );
+      }
+
+      if (applicableTestTypes.has(TestType.WeighingPerformance)) {
+        if (weighingRows.length === 0) {
+          throw new Error('At least one weighing performance observation is required.');
+        }
+        for (const [index, row] of weighingRows.entries()) {
+          if (row.load.trim() === '' && row.indicatedValue.trim() === '') {
+            continue;
+          }
+          const val = validateWeighingLoadInput(row.load, {
+            min: Number(instrument.min) || undefined,
+            max: Number(instrument.max) || undefined,
+          });
+          if (!val.isValid) {
+            throw new Error(`Weighing performance observation ${index + 1}: ${val.error}`);
+          }
+        }
+      }
+      if (applicableTestTypes.has(TestType.EccentricLoading)) {
+        if (eccentricRows.length === 0) {
+          throw new Error('At least one eccentric loading observation is required.');
+        }
+        const requiredPositions = supportPoints === 3 ? 3 : 4;
+        const testedIds = new Set(eccentricRows.map((r) => r.positionId.trim()).filter(Boolean));
+        const expectedPositions = Array.from({ length: requiredPositions }, (_, i) => String(i + 1));
+        const missing = expectedPositions.filter(
+          (exp) =>
+            !Array.from(testedIds).some(
+              (id) =>
+                id === exp ||
+                id.toLowerCase() === `position-${exp}` ||
+                id.toLowerCase() === `position ${exp}` ||
+                id.toLowerCase() === `pos-${exp}` ||
+                id.toLowerCase() === `pos${exp}` ||
+                id.toLowerCase() === `quarter-${exp}` ||
+                id.toLowerCase() === `quarter ${exp}`
+            )
+        );
+        if (testedIds.size < requiredPositions || missing.length > 0) {
+          throw new Error(
+            `Incomplete eccentric loading test: Instrument has ${supportPoints} support points requiring ${requiredPositions} loading positions (OIML R 76-1 clause 3.6.2.1 / A.4.7.1). Only ${testedIds.size} distinct position(s) tested. Missing required position(s): ${missing.map((p) => `Position ${p}`).join(', ')}.`
+          );
+        }
+      }
+      if (applicableTestTypes.has(TestType.Discrimination) && discriminationRows.length === 0) {
+        throw new Error('At least one discrimination observation is required.');
+      }
+      if (applicableTestTypes.has(TestType.ZeroSettingAccuracy)) {
+        if (zeroSetting.load.trim() === '' || zeroSetting.indicatedValue.trim() === '') {
+          throw new Error('Zero-setting accuracy observation (load and indicated value) is required.');
+        }
       }
 
       const instrumentPayload: Instrument = {
@@ -588,19 +902,23 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           instrument.accuracyClass,
 
         max: parseNum(
-          instrument.max
+          instrument.max,
+          'Instrument Max capacity'
         ),
 
         min: parseNum(
-          instrument.min
+          instrument.min,
+          'Instrument Min capacity'
         ),
 
         e: parseNum(
-          instrument.e
+          instrument.e,
+          'Instrument verification scale interval e'
         ),
 
         d: parseNum(
-          instrument.d
+          instrument.d,
+          'Instrument scale interval d'
         ),
 
         numberOfSupportPoints:
@@ -619,7 +937,8 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
         initialZeroSettingRange:
           parseNum(
             instrument
-              .initialZeroSettingRange
+              .initialZeroSettingRange || '0',
+            'Initial zero-setting range'
           ),
 
         hasFineDisplayDevice:
@@ -627,92 +946,155 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
 
         instrumentType:
           InstrumentType.SingleRange,
+
+        indicationType: instrument.indicationType
+          ? (instrument.indicationType.toLowerCase() as IndicationType)
+          : undefined,
+
+        zeroSettingMechanisms: Array.isArray(instrument.zeroSettingMechanisms)
+          ? (instrument.zeroSettingMechanisms.map(m => m.toLowerCase()) as any[]).sort()
+          : undefined,
       };
 
-      const observationsPayload: TestObservations =
-        {
-          weighingPerformance:
-            weighingRows.map(
+      const observationsPayload: TestObservations = {
+        weighingPerformance: applicableTestTypes.has(TestType.WeighingPerformance)
+          ? weighingRows.map(
               (row, index) => ({
                 sequenceIndex: index,
 
                 load:
                   parseNum(
-                    row.load
+                    row.load,
+                    `Weighing test load (row ${index + 1})`
                   ),
 
                 indicatedValue:
                   parseNum(
-                    row.indicatedValue
+                    row.indicatedValue,
+                    `Weighing indicated value (row ${index + 1})`
                   ),
 
                 additionalLoad:
                   parseNum(
-                    row.additionalLoad
+                    row.additionalLoad,
+                    `Weighing additional load (row ${index + 1})`
                   ),
 
                 zeroError:
                   parseNum(
-                    row.zeroError
+                    row.zeroError,
+                    `Weighing zero error (row ${index + 1})`
                   ),
 
                 loadingDirection:
                   row.loadingDirection,
               })
-            ),
+            )
+          : [],
 
-          repeatability: {
-            testLoad:
-              parseNum(
-                repeatability.testLoad
-              ),
+        repeatability: applicableTestTypes.has(TestType.Repeatability)
+          ? {
+              testLoad:
+                parseNum(
+                  repeatability.testLoad || (repeatability.series?.[0]?.testLoad ?? '0'),
+                  'Repeatability test load'
+                ),
 
-            indications:
-              repeatability.indications.map(
-                (indication) =>
-                  parseNum(indication)
-              ),
+              indications:
+                repeatability.indications.map(
+                  (indication, i) =>
+                    parseNum(
+                      indication,
+                      `Repeatability indication ${i + 1}`
+                    )
+                ),
 
-            autoZeroOrTrackingActive:
-              repeatability
-                .autoZeroOrTrackingActive,
-          },
+              autoZeroOrTrackingActive:
+                repeatability
+                  .autoZeroOrTrackingActive,
 
-          eccentricLoading:
-            eccentricRows.map(
-              (row) => ({
+              ...(repeatability.series && repeatability.series.length > 0
+                ? {
+                    series: repeatability.series.map((s) => ({
+                      seriesNumber: s.seriesNumber,
+                      testLoad: parseNum(s.testLoad, `Series ${s.seriesNumber} test load`),
+                      indications: s.indications.map((val, i) =>
+                        parseNum(val, `Series ${s.seriesNumber} indication ${i + 1}`)
+                      ),
+                    })),
+                  }
+                : {}),
+            }
+          : undefined,
+
+        eccentricLoading: applicableTestTypes.has(TestType.EccentricLoading)
+          ? eccentricRows.map(
+              (row, index) => ({
                 positionId:
                   row.positionId.trim(),
 
                 appliedLoad:
                   parseNum(
-                    row.appliedLoad
+                    row.appliedLoad,
+                    `Eccentric test load (${row.positionId || `row ${index + 1}`})`
                   ),
 
                 indicatedValue:
                   parseNum(
-                    row.indicatedValue
+                    row.indicatedValue,
+                    `Eccentric indicated value (${row.positionId || `row ${index + 1}`})`
                   ),
 
                 additionalLoad:
                   parseNum(
-                    row.additionalLoad
+                    row.additionalLoad,
+                    `Eccentric additional load (${row.positionId || `row ${index + 1}`})`
                   ),
 
                 zeroError:
                   parseNum(
-                    row.zeroError
+                    row.zeroError,
+                    `Eccentric zero error (${row.positionId || `row ${index + 1}`})`
                   ),
 
                 autoZeroOrTrackingDisabled:
                   row
                     .autoZeroOrTrackingDisabled,
               })
-            ),
+            )
+          : [],
 
-          eccentricZeroDeterminedBeforeEachLoading:
-            eccentricZeroDetermined,
-        };
+        eccentricZeroDeterminedBeforeEachLoading: applicableTestTypes.has(TestType.EccentricLoading)
+          ? eccentricZeroDetermined
+          : false,
+
+        discrimination: applicableTestTypes.has(TestType.Discrimination)
+          ? discriminationRows.map(
+              (row, index) => ({
+                testLoad: parseNum(
+                  row.testLoad,
+                  `Discrimination test load (row ${index + 1})`
+                ),
+                indicationBefore: parseNum(
+                  row.indicationBefore,
+                  `Discrimination indication before (row ${index + 1})`
+                ),
+                indicationAfter: parseNum(
+                  row.indicationAfter,
+                  `Discrimination indication after (row ${index + 1})`
+                ),
+              })
+            )
+          : [],
+
+        zeroSettingAccuracy: applicableTestTypes.has(TestType.ZeroSettingAccuracy)
+          ? {
+              load: parseNum(zeroSetting.load, 'Zero-setting test load'),
+              indicatedValue: parseNum(zeroSetting.indicatedValue, 'Zero-setting indicated value'),
+              additionalLoad: parseNum(zeroSetting.additionalLoad.trim() || '0', 'Zero-setting additional load'),
+            }
+          : undefined,
+      };
 
       const response = await fetch(
         '/api/r76/evaluate',
@@ -805,11 +1187,73 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
   }
 
   const testingReadOnly = Boolean(
-    session && !['DRAFT', 'IN_PROGRESS'].includes(session.status)
+    session && !['DRAFT', 'IN_PROGRESS', 'RETURNED'].includes(session.status)
   );
+
+  /**
+   * Derive test applicability from the currently-loaded instrument.
+   * Re-runs whenever the instrument form state changes (e.g. after load).
+   * Falls back to showing all three sections when the instrument has not
+   * been loaded yet (instrumentLoading) so that the form is never blank.
+   */
+  const testSelection: TestSelectionResult[] = useMemo(() => {
+    if (instrumentLoading || instrumentLoadError) return [];
+    // Build a minimal Instrument object from the form state to drive selection.
+    // Numeric fields default to 0/false when unparseable so that the engine
+    // can still return a definitive selection (it will mark them unsupported).
+    const supportPoints = Number(instrument.numberOfSupportPoints);
+    const instrumentObj: Instrument = {
+      id: instrument.id,
+      manufacturer: instrument.manufacturer,
+      model: instrument.model,
+      serialNumber: instrument.serialNumber || undefined,
+      accuracyClass: instrument.accuracyClass,
+      max: Number(instrument.max) || 0,
+      min: Number(instrument.min) || 0,
+      e: Number(instrument.e) || 0,
+      d: Number(instrument.d) || 0,
+      numberOfSupportPoints: Number.isFinite(supportPoints) && supportPoints > 0 ? supportPoints : 4,
+      additiveTareEffect: instrument.additiveTareEffect,
+      hasAutoZeroOrTracking: instrument.hasAutoZeroOrTracking,
+      hasInitialZeroSettingDevice: instrument.hasInitialZeroSettingDevice,
+      initialZeroSettingRange: Number(instrument.initialZeroSettingRange) || 0,
+      hasFineDisplayDevice: instrument.hasFineDisplayDevice,
+      // The UI form stores 'SINGLE_RANGE'; the engine uses InstrumentType enum.
+      // Non-single-range types cause the engine to mark all tests as manual_review.
+      instrumentType: instrument.instrumentType === 'SINGLE_RANGE'
+        ? InstrumentType.SingleRange
+        : (instrument.instrumentType as unknown as InstrumentType),
+      indicationType: instrument.indicationType
+        ? (instrument.indicationType.toLowerCase() as IndicationType)
+        : undefined,
+      zeroSettingMechanisms: Array.isArray(instrument.zeroSettingMechanisms)
+        ? (instrument.zeroSettingMechanisms.map(m => m.toLowerCase()) as any[]).sort()
+        : undefined,
+    };
+    return selectTests(instrumentObj, verificationContext);
+  }, [
+    instrumentLoading,
+    instrumentLoadError,
+    instrument,
+    verificationContext,
+  ]);
+
+  /** Set of TestType values that the selection engine marked as applicable. */
+  const applicableTestTypes = useMemo(
+    () => new Set(testSelection.filter(s => s.isApplicable).map(s => s.testType)),
+    [testSelection]
+  );
+
+  /**
+   * The number of applicable (isApplicable === true) tests for this instrument.
+   * Used to gate the "Submit for Review" button instead of the hardcoded 3.
+   */
+  const applicableTestCount = applicableTestTypes.size;
+
   const canSubmitForReview = Boolean(
-    session?.status === 'IN_PROGRESS' &&
-    savedResults.length === 3 &&
+    (session?.status === 'IN_PROGRESS' || session?.status === 'RETURNED') &&
+    applicableTestCount > 0 &&
+    savedResults.length >= applicableTestCount &&
     !resultsStale &&
     !resultIntegrityError
   );
@@ -842,12 +1286,28 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
         <span className="font-semibold text-[#0A66C2]">
           {session?.status.replaceAll('_', ' ')}
         </span>
+        <span className="h-3 w-px bg-[#D9E2EC]" aria-hidden="true" />
+        <span className="font-bold uppercase tracking-[0.08em] text-[#344054]">Active Context</span>
+        <span
+          data-testid="session-verification-context"
+          className="rounded bg-[#EFF8FF] px-2 py-0.5 font-bold uppercase tracking-[0.05em] text-[#175CD3]"
+        >
+          {getVerificationContextLabel(verificationContext)}
+        </span>
       </div>
       {session && <ReportActions sessionId={session.id} status={session.status} />}
       {testingReadOnly && (
         <p role="status" className="m-0 rounded-[5px] border border-[#B9D5EF] bg-[#F6FAFE] px-3 py-2 text-[0.72rem] text-[#004182]">
           This session is {session?.status.replaceAll('_', ' ')}. Observation entry and evaluation are read-only.
         </p>
+      )}
+      {session?.status === 'RETURNED' && approvals.filter(a => a.action === 'RETURN').length > 0 && (
+        <div role="alert" className="rounded-[5px] border border-[#F3C7C7] bg-[#FEF3F2] px-4 py-3 text-[0.76rem]">
+          <h3 className="m-0 font-bold text-[#B42318]">Returned for Correction</h3>
+          <p className="mt-1 text-[#667085]">
+            {approvals.filter(a => a.action === 'RETURN').slice(-1)[0].comments}
+          </p>
+        </div>
       )}
       <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1.18fr)_minmax(430px,0.82fr)]">
       {/* Input workflow */}
@@ -872,55 +1332,124 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           }
         />
 
-        <WeighingPerformanceSection
-          rows={weighingRows}
-          onChange={(rows) => {
-            setWeighingRows(rows);
-            markDisplayedResultsStale();
-          }}
-          nextId={() =>
-            `w-${nextId()}`
-          }
-        />
-
-        <RepeatabilitySection
-          value={repeatability}
-          onChange={(value) => {
-            setRepeatability(value);
-            markDisplayedResultsStale();
-          }}
-          accuracyClass={
-            instrument.accuracyClass
-          }
-          instrumentHasAutoZero={
-            instrument
-              .hasAutoZeroOrTracking
-          }
-        />
-
-        <EccentricLoadingSection
-          rows={eccentricRows}
-          onChange={(rows) => {
-            setEccentricRows(rows);
-            markDisplayedResultsStale();
-          }}
-          zeroDeterminedBeforeEachLoading={
-            eccentricZeroDetermined
-          }
-          onZeroDeterminedChange={
-            (value) => {
-              setEccentricZeroDetermined(value);
+        {/* Weighing Performance — shown only when selection engine marks it applicable */}
+        {testSelection.length === 0 || applicableTestTypes.has(TestType.WeighingPerformance) ? (
+          <WeighingPerformanceSection
+            rows={weighingRows}
+            onChange={(rows) => {
+              setWeighingRows(rows);
               markDisplayedResultsStale();
+            }}
+            nextId={() => generateRowId('w')}
+            verificationContext={verificationContext}
+            instrumentMin={Number(instrument.min) || undefined}
+            instrumentMax={Number(instrument.max) || undefined}
+            instrumentE={Number(instrument.e) || undefined}
+          />
+        ) : (
+          <NotApplicableBanner
+            testName="Weighing Performance"
+            reason={testSelection.find(s => s.testType === TestType.WeighingPerformance)?.reason ?? 'Not applicable for this instrument configuration.'}
+            r76Reference={testSelection.find(s => s.testType === TestType.WeighingPerformance)?.r76Reference}
+          />
+        )}
+
+        {/* Repeatability — shown only when selection engine marks it applicable */}
+        {testSelection.length === 0 || applicableTestTypes.has(TestType.Repeatability) ? (
+          <RepeatabilitySection
+            value={repeatability}
+            onChange={(value) => {
+              setRepeatability(value);
+              markDisplayedResultsStale();
+            }}
+            accuracyClass={
+              instrument.accuracyClass
             }
-          }
-          instrumentHasAutoZero={
-            instrument
-              .hasAutoZeroOrTracking
-          }
-          nextId={() =>
-            `e-${nextId()}`
-          }
-        />
+            instrumentHasAutoZero={
+              instrument
+                .hasAutoZeroOrTracking
+            }
+            verificationContext={verificationContext}
+            instrumentMax={Number(instrument.max) || undefined}
+          />
+        ) : (
+          <NotApplicableBanner
+            testName="Repeatability"
+            reason={testSelection.find(s => s.testType === TestType.Repeatability)?.reason ?? 'Not applicable for this instrument configuration.'}
+            r76Reference={testSelection.find(s => s.testType === TestType.Repeatability)?.r76Reference}
+          />
+        )}
+
+        {/* Eccentric Loading — shown only when selection engine marks it applicable */}
+        {testSelection.length === 0 || applicableTestTypes.has(TestType.EccentricLoading) ? (
+          <EccentricLoadingSection
+            rows={eccentricRows}
+            onChange={(rows) => {
+              setEccentricRows(rows);
+              markDisplayedResultsStale();
+            }}
+            zeroDeterminedBeforeEachLoading={
+              eccentricZeroDetermined
+            }
+            onZeroDeterminedChange={
+              (value) => {
+                setEccentricZeroDetermined(value);
+                markDisplayedResultsStale();
+              }
+            }
+            instrumentHasAutoZero={
+              instrument
+                .hasAutoZeroOrTracking
+            }
+            numberOfSupportPoints={
+              Number(instrument.numberOfSupportPoints) || 4
+            }
+            instrumentMax={Number(instrument.max) || undefined}
+            instrumentE={Number(instrument.e) || undefined}
+            nextId={() => generateRowId('e')}
+          />
+        ) : (
+          <NotApplicableBanner
+            testName="Eccentric Loading"
+            reason={testSelection.find(s => s.testType === TestType.EccentricLoading)?.reason ?? 'Not applicable for this instrument configuration.'}
+            r76Reference={testSelection.find(s => s.testType === TestType.EccentricLoading)?.r76Reference}
+          />
+        )}
+
+        {/* Discrimination — shown only when selection engine marks it applicable */}
+        {testSelection.length === 0 || applicableTestTypes.has(TestType.Discrimination) ? (
+          <DiscriminationSection
+            rows={discriminationRows}
+            onChange={(rows) => {
+              setDiscriminationRows(rows);
+              markDisplayedResultsStale();
+            }}
+            nextId={() => generateRowId('d')}
+          />
+        ) : (
+          <NotApplicableBanner
+            testName="Discrimination"
+            reason={testSelection.find(s => s.testType === TestType.Discrimination)?.reason ?? 'Not applicable for this instrument configuration.'}
+            r76Reference={testSelection.find(s => s.testType === TestType.Discrimination)?.r76Reference}
+          />
+        )}
+
+        {/* Zero-Setting Accuracy */}
+        {testSelection.length === 0 || applicableTestTypes.has(TestType.ZeroSettingAccuracy) ? (
+          <ZeroSettingSection
+            value={zeroSetting}
+            onChange={(val) => {
+              setZeroSetting(val);
+              markDisplayedResultsStale();
+            }}
+          />
+        ) : (
+          <NotApplicableBanner
+            testName="Zero-Setting Accuracy"
+            reason={testSelection.find(s => s.testType === TestType.ZeroSettingAccuracy)?.reason ?? 'Not applicable for this instrument configuration.'}
+            r76Reference={testSelection.find(s => s.testType === TestType.ZeroSettingAccuracy)?.r76Reference}
+          />
+        )}
 
         </fieldset>
         {saveMessage && (
@@ -980,8 +1509,17 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
             </>
           )}
           {canSubmitForReview && (
-            <button type="button" onClick={() => void submitForReview()} disabled={submittingReview} className="min-w-[190px] rounded-[5px] bg-[#067647] px-5 py-3 text-[0.8rem] font-bold text-white disabled:bg-[#98A2B3]">
-              {submittingReview ? 'Submitting…' : 'Submit for Review'}
+            <button
+              type="button"
+              onClick={() => void submitForReview()}
+              disabled={submittingReview}
+              className="min-w-[190px] rounded-[5px] bg-[#067647] px-5 py-3 text-[0.8rem] font-bold text-white disabled:bg-[#98A2B3]"
+            >
+              {submittingReview
+                ? 'Submitting…'
+                : session?.status === 'RETURNED'
+                ? 'Resubmit for Review'
+                : 'Submit for Review'}
             </button>
           )}
         </div>

@@ -120,24 +120,58 @@ describe('validateInstrumentCreate', () => {
     const result = validateInstrumentCreate({
       ...validCreate,
       serialNumber: null,
+      indicationType: 'DIGITAL',
       additiveTareEffect: false,
       hasAutoZeroOrTracking: true,
       hasInitialZeroSettingDevice: true,
       hasFineDisplayDevice: false,
+      zeroSettingMechanisms: ['AUTOMATIC', 'SEMI_AUTOMATIC'],
     });
 
     expect(result.success).toBe(true);
     expect(result.data?.serialNumber).toBeNull();
+    expect(result.data?.indicationType).toBe('DIGITAL');
+    expect(result.data?.zeroSettingMechanisms).toEqual(['AUTOMATIC', 'SEMI_AUTOMATIC']);
+  });
+
+  it('rejects invalid zeroSettingMechanisms', () => {
+    const result = validateInstrumentCreate({ ...validCreate, zeroSettingMechanisms: ['AUTOMATIC', 'INVALID'] });
+
+    expect(result.success).toBe(false);
+    expect(result.errors).toContainEqual({
+      field: 'zeroSettingMechanisms',
+      message: 'elements must be one of: NON_AUTOMATIC, SEMI_AUTOMATIC, AUTOMATIC, ZERO_TRACKING',
+    });
+  });
+
+  it('rejects non-array zeroSettingMechanisms', () => {
+    const result = validateInstrumentCreate({ ...validCreate, zeroSettingMechanisms: 'AUTOMATIC' });
+
+    expect(result.success).toBe(false);
+    expect(result.errors).toContainEqual({
+      field: 'zeroSettingMechanisms',
+      message: 'must be an array',
+    });
+  });
+
+  it('rejects invalid indicationType', () => {
+    const result = validateInstrumentCreate({ ...validCreate, indicationType: 'INVALID' });
+
+    expect(result.success).toBe(false);
+    expect(result.errors).toContainEqual({
+      field: 'indicationType',
+      message: 'must be one of: DIGITAL, ANALOG',
+    });
   });
 });
 
 describe('validateInstrumentUpdate', () => {
   it('accepts a valid partial update and trims strings', () => {
-    const result = validateInstrumentUpdate({ model: '  Precision 2000  ', max: '2000.00' });
+    const result = validateInstrumentUpdate({ model: '  Precision 2000  ', max: '2000.00', indicationType: 'ANALOG' });
 
     expect(result).toEqual({
       success: true,
-      data: { model: 'Precision 2000', max: '2000.00' },
+      data: { model: 'Precision 2000', max: '2000.00', indicationType: 'ANALOG' },
       errors: [],
     });
   });
@@ -146,5 +180,15 @@ describe('validateInstrumentUpdate', () => {
     const result = validateInstrumentUpdate({ min: '10.0000000001', max: '10' });
 
     expect(result.errors).toContainEqual({ field: 'min', message: 'must be less than max' });
+  });
+
+  it('updates zeroSettingMechanisms', () => {
+    const result = validateInstrumentUpdate({ zeroSettingMechanisms: ['ZERO_TRACKING'] });
+
+    expect(result).toEqual({
+      success: true,
+      data: { zeroSettingMechanisms: ['ZERO_TRACKING'] },
+      errors: [],
+    });
   });
 });

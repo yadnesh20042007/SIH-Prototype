@@ -15,16 +15,22 @@
 
 // ── Instrument ─────────────────────────────────────────────────────
 export type { Instrument }                    from './instrument';
-export      { AccuracyClass, InstrumentType } from './instrument';
+export      { AccuracyClass, InstrumentType, IndicationType } from './instrument';
 
 // ── Verification ───────────────────────────────────────────────────
-export { VerificationContext }                from './verification';
+export {
+  VerificationContext,
+  normalizeVerificationContext,
+  isTypeEvaluationContext,
+  getVerificationContextLabel,
+} from './verification';
 
 // ── Observations ───────────────────────────────────────────────────
 export type { LoadingDirection }                    from './observations';
 export type { WeighingPerformanceObservation }      from './observations';
 export type { RepeatabilityObservation }            from './observations';
 export type { EccentricLoadingObservation }         from './observations';
+export type { DiscriminationObservationPoint }      from './observations';
 
 // ── Results ────────────────────────────────────────────────────────
 export { TestStatus, TestOutcome }                  from './results';
@@ -40,4 +46,5 @@ export      { TestType }                            from './test';
 export type { WeighingPerformanceTest }             from './test';
 export type { RepeatabilityTest }                   from './test';
 export type { EccentricLoadingTest }                from './test';
+export type { DiscriminationTest }                  from './test';
 export type { R76Test }                             from './test';

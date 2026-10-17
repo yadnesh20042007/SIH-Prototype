@@ -7,6 +7,7 @@ const { testObservationMock } = vi.hoisted(() => ({
     findMany: vi.fn(),
     findUnique: vi.fn(),
     update: vi.fn(),
+    delete: vi.fn(),
   },
 }));
 
@@ -26,6 +27,7 @@ import {
 } from '@/lib/db/errors';
 import {
   createTestObservation,
+  deleteTestObservation,
   getTestObservationById,
   listTestObservations,
   updateTestObservation,
@@ -165,5 +167,26 @@ describe('TestObservation service unit tests (mocked Prisma)', () => {
 
     expect(result.observationData).toEqual(observationData);
     expect(result.createdAt).toBe('2026-09-06T10:30:00.125Z');
+  });
+
+  it('deletes an observation from draft session', async () => {
+    testObservationMock.findUnique.mockResolvedValue({
+      ...persistedObservation,
+      session: { status: 'DRAFT' },
+    });
+    testObservationMock.delete.mockResolvedValue(persistedObservation);
+
+    await expect(deleteTestObservation('observation-1')).resolves.toBeUndefined();
+    expect(testObservationMock.delete).toHaveBeenCalledWith({ where: { id: 'observation-1' } });
+  });
+
+  it('rejects deleting observation from approved or locked session', async () => {
+    testObservationMock.findUnique.mockResolvedValue({
+      ...persistedObservation,
+      session: { status: 'APPROVED' },
+    });
+
+    await expect(deleteTestObservation('observation-1')).rejects.toBeInstanceOf(DatabaseConflictError);
+    expect(testObservationMock.delete).not.toHaveBeenCalled();
   });
 });

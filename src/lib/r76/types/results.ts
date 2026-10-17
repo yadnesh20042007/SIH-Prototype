@@ -35,6 +35,11 @@ export enum TestOutcome {
    * (R76-1 §5.2, Note)
    */
   RequiresRetest = 'requires_retest',
+  /**
+   * One or more mandatory observations, load points, or procedure sequences
+   * are missing, preventing a final compliance determination.
+   */
+  Incomplete     = 'incomplete',
 }
 
 // ─── Observation-level result ─────────────────────────────────────

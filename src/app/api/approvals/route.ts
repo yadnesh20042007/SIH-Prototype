@@ -16,6 +16,7 @@ const ACTION_ROLES = {
   CANCEL: ['LAB_TECHNICIAN', 'ADMIN'],
   REVIEW_APPROVE: ['REVIEWING_OFFICER', 'ADMIN'],
   REVIEW_REJECT: ['REVIEWING_OFFICER', 'ADMIN'],
+  RETURN: ['REVIEWING_OFFICER', 'APPROVING_OFFICER', 'ADMIN'],
   FINAL_APPROVE: ['APPROVING_OFFICER', 'ADMIN'],
   FINAL_REJECT: ['APPROVING_OFFICER', 'ADMIN'],
 } as const;
@@ -56,7 +57,8 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  if (!ACTION_ROLES[validation.data.action].some((role) => role === authentication.user.role)) {
+  const allowedRoles = (ACTION_ROLES as Record<string, readonly string[]>)[validation.data.action];
+  if (!allowedRoles.some((role: string) => role === authentication.user.role)) {
     return Response.json({ error: 'Insufficient permissions for this workflow action' }, { status: 403 });
   }
 

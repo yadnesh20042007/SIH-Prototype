@@ -67,21 +67,42 @@ export interface WeighingPerformanceObservation {
 // ─── Repeatability ────────────────────────────────────────────────
 
 /**
- * All observations for a single repeatability test run.
- *
- * R76-2 §4.3: The same test load is applied repeatedly (typically ≥ 5 times)
- * without changing the instrument setup between repetitions.
+ * A single series of repeated weighings at a specified test load.
+ * OIML R 76-1 Annex A.4.10: Type evaluation mandates two series (about 0.5 Max and close to Max).
  */
-export interface RepeatabilityObservation {
-  /** Test load applied for all repetitions, in kg. */
+export interface RepeatabilitySeries {
+  /** 1-based series identifier (e.g. 1 for ~0.5 Max, 2 for close to Max). */
+  seriesNumber: number;
+
+  /** Test load applied for all repetitions in this series, in kg. */
   testLoad: number;
 
+  /** Array of instrument indications from each repetition in this series, in kg. */
+  indications: number[];
+}
+
+/**
+ * All observations for a repeatability test run.
+ *
+ * R76-1 Annex A.4.10 / R76-2 §4.3:
+ * Supports multi-series configurations (Type Evaluation) as well as
+ * single-series configurations (Verification) while preserving backward compatibility.
+ */
+export interface RepeatabilityObservation {
   /**
-   * Array of instrument indications from each repetition, in kg.
-   * Must contain at least 2 values; R76-2 typically requires ≥ 5.
+   * Optional array of weighing series for multi-series testing.
+   * Mandated for Type Evaluation (A.4.10 requires two series).
+   */
+  series?: RepeatabilitySeries[];
+
+  /** Test load applied for single-series / legacy test records, in kg. */
+  testLoad?: number;
+
+  /**
+   * Array of instrument indications for single-series / legacy test records, in kg.
    * Stored in chronological order (first repetition at index 0).
    */
-  indications: number[];
+  indications?: number[];
 
   /**
    * Confirms that the auto-zero / zero-tracking device was active
@@ -134,4 +155,43 @@ export interface EccentricLoadingObservation {
    * Must be true when Instrument.hasAutoZeroOrTracking is true.
    */
   autoZeroOrTrackingDisabled: boolean;
+}
+
+// ─── Discrimination ───────────────────────────────────────────────
+
+/**
+ * A single observation point for the discrimination test.
+ *
+ * R76-1 Annex A.4.8: Performed at three different loads (e.g., Min, 0.5 Max, Max).
+ * Records the indication before and after applying a small additional load (1.4d).
+ */
+export interface DiscriminationObservationPoint {
+  /** Applied test load in kg. */
+  testLoad: number;
+
+  /** Indication before applying the additional 1.4d load, in kg. */
+  indicationBefore: number;
+
+  /** Indication after applying the additional 1.4d load, in kg. */
+  indicationAfter: number;
+}
+
+// ─── Zero-Setting Accuracy ────────────────────────────────────────
+
+/**
+ * A single observation for the zero-setting accuracy test.
+ *
+ * R76-1 Annex A.4.2.3: Determine the error at zero.
+ * The variables L, I, and ΔL are used to calculate the zero error E0:
+ * E0 = I + 0.5e - ΔL - L.
+ */
+export interface ZeroSettingObservation {
+  /** Applied reference load L (e.g., 10e) to bring out of zero-tracking range, in kg. */
+  load: number;
+
+  /** Instrument indication I in kg. */
+  indicatedValue: number;
+
+  /** Additional substituted load ΔL in kg used to find the changeover point. */
+  additionalLoad: number;
 }

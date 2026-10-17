@@ -2,7 +2,7 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { DatabaseConflictError, DatabaseNotFoundError, throwMappedDatabaseError } from '@/lib/db/errors';
 import { evaluateInstrumentCompliance, type TestObservations } from '@/lib/r76/engine';
-import { AccuracyClass, InstrumentType, VerificationContext, type Instrument } from '@/lib/r76/types';
+import { AccuracyClass, InstrumentType, VerificationContext, normalizeVerificationContext, type Instrument } from '@/lib/r76/types';
 import { toTestResultPersistenceData } from '@/components/Evaluation/result-persistence';
 import { toTestResultRecord } from './test-result.service';
 import { logicalObservationFingerprint, observationConflict, PROTOTYPE_TEST_TYPES } from './result-freshness.service';
@@ -45,7 +45,7 @@ export async function evaluateSavedSession(sessionId: string, expected: Expected
       // Numeric conversion occurs only at the existing engine boundary.
       const instrument: Instrument = {
         id: saved.id, manufacturer: saved.manufacturer.name, model: saved.model,
-        serialNumber: saved.serialNumber ?? undefined,
+        serialNumber: saved.serialNumber ? saved.serialNumber.trim() || undefined : undefined,
         accuracyClass: saved.accuracyClass as AccuracyClass,
         instrumentType: InstrumentType.SingleRange,
         max: Number(saved.max), min: Number(saved.min), e: Number(saved.e), d: Number(saved.d),
@@ -55,23 +55,28 @@ export async function evaluateSavedSession(sessionId: string, expected: Expected
         hasInitialZeroSettingDevice: saved.hasInitialZeroSettingDevice,
         initialZeroSettingRange: Number(saved.initialZeroSettingRange),
         hasFineDisplayDevice: saved.hasFineDisplayDevice,
+        indicationType: saved.indicationType ? (saved.indicationType.toLowerCase() as any) : undefined,
+        zeroSettingMechanisms: Array.isArray((saved as { zeroSettingMechanisms?: any[] }).zeroSettingMechanisms)
+          ? (saved as { zeroSettingMechanisms?: any[] }).zeroSettingMechanisms!.map((m: string) => m.toLowerCase() as any).sort()
+          : undefined,
       };
-      const context = {
-        INITIAL_VERIFICATION: VerificationContext.InitialVerification,
-        SUBSEQUENT_VERIFICATION: VerificationContext.SubsequentVerification,
-        SERVICE_INSPECTION: VerificationContext.ServiceInspection,
-      }[session.verificationContext];
+      if (saved.hasInitialZeroSettingDevice && Number(saved.initialZeroSettingRange) > 1) {
+        throw new DatabaseConflictError(
+          `Instrument initialZeroSettingRange (${saved.initialZeroSettingRange}) exceeds 1.0 (100% of Max) and cannot be safely interpreted; manual review is required`
+        );
+      }
+      const context = normalizeVerificationContext(session.verificationContext);
       const dataFor = (type: string) => rows.filter(row => row.testType === type)
         .map(row => row.observationData);
       const pick = (data: unknown, fields: string[]) => Object.fromEntries(fields.map(field => [
-        field, (data as Record<string, unknown>)[field] ?? (field === 'additionalLoad' ? 0 : undefined),
+        field, (data as Record<string, unknown>)[field],
       ]));
       const observations: TestObservations = {
         weighingPerformance: dataFor('WEIGHING_PERFORMANCE').map(data => pick(data, [
           'sequenceIndex', 'load', 'indicatedValue', 'additionalLoad', 'zeroError', 'loadingDirection',
         ])) as unknown as TestObservations['weighingPerformance'],
         repeatability: dataFor('REPEATABILITY')[0] ? pick(dataFor('REPEATABILITY')[0], [
-          'testLoad', 'indications', 'autoZeroOrTrackingActive',
+          'testLoad', 'indications', 'autoZeroOrTrackingActive', 'series',
         ]) as unknown as TestObservations['repeatability'] : undefined,
         eccentricLoading: dataFor('ECCENTRIC_LOADING').map(data => pick(data, [
           'positionId', 'appliedLoad', 'indicatedValue', 'additionalLoad', 'zeroError', 'autoZeroOrTrackingDisabled',
@@ -79,13 +84,22 @@ export async function evaluateSavedSession(sessionId: string, expected: Expected
         eccentricZeroDeterminedBeforeEachLoading: Boolean(
           (dataFor('ECCENTRIC_LOADING')[0] as Record<string, unknown> | undefined)?.zeroDeterminedBeforeEachLoading
         ),
+        discrimination: dataFor('DISCRIMINATION').map(data => pick(data, [
+          'testLoad', 'indicationBefore', 'indicationAfter'
+        ])) as unknown as TestObservations['discrimination'],
+        zeroSettingAccuracy: dataFor('ZERO_SETTING_ACCURACY')[0] ? pick(dataFor('ZERO_SETTING_ACCURACY')[0], [
+          'load', 'indicatedValue', 'additionalLoad',
+        ]) as unknown as TestObservations['zeroSettingAccuracy'] : undefined,
       };
       // If a UI snapshot is supplied, reject unsaved edits or a concurrent browser's changes.
       const savedInputs = { instrument, verificationContext: context, observations };
       for (const key of ['instrument', 'verificationContext', 'observations'] as const) {
-        if (expected[key] !== undefined && canonicalJson(expected[key]) !==
-          canonicalJson(JSON.parse(JSON.stringify(savedInputs[key])))) {
-          throw new DatabaseConflictError('Displayed inputs differ from saved data; save or reload before evaluation');
+        if (expected[key] !== undefined) {
+          const expVal = key === 'verificationContext' ? normalizeVerificationContext(expected[key] as any) : expected[key];
+          if (canonicalJson(JSON.parse(JSON.stringify(expVal))) !==
+            canonicalJson(JSON.parse(JSON.stringify(savedInputs[key])))) {
+            throw new DatabaseConflictError('Displayed inputs differ from saved data; save or reload before evaluation');
+          }
         }
       }
       const evaluation = evaluateInstrumentCompliance(instrument, context, observations);

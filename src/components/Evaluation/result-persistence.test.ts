@@ -112,12 +112,13 @@ describe('observation freshness signature', () => {
       id: 'e-1', positionId: ' position-1 ', appliedLoad: '10.0', indicatedValue: '10',
       additionalLoad: '0.0050', zeroError: '0', autoZeroOrTrackingDisabled: true,
     }];
-    expect(observationStateSignature(weighing, repeatability, eccentric, false)).toBe(
+    expect(observationStateSignature(weighing, repeatability, eccentric, false, [])).toBe(
       observationStateSignature(
         [{ ...weighing[0], load: '10', indicatedValue: '10.01', zeroError: '0' }],
         { ...repeatability, testLoad: '10', indications: ['10.0', '10.01', '9.990'] },
         [{ ...eccentric[0], positionId: 'position-1', appliedLoad: '10', additionalLoad: '0.005' }],
-        false
+        false,
+        []
       )
     );
   });
@@ -134,9 +135,9 @@ describe('observation freshness signature', () => {
       id: 'e-1', positionId: 'position-1', appliedLoad: '', indicatedValue: '',
       additionalLoad: '0', zeroError: '0', autoZeroOrTrackingDisabled: true,
     }];
-    expect(observationStateSignature(weighing, repeatability, eccentric, false)).not.toBe(
+    expect(observationStateSignature(weighing, repeatability, eccentric, false, [])).not.toBe(
       observationStateSignature(
-        [{ ...weighing[0], indicatedValue: '10.02' }], repeatability, eccentric, false
+        [{ ...weighing[0], indicatedValue: '10.02' }], repeatability, eccentric, false, []
       )
     );
   });

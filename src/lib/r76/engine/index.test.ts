@@ -21,14 +21,23 @@ describe('End-to-End Orchestration Service (R76 Engine)', () => {
     hasInitialZeroSettingDevice: false,
     initialZeroSettingRange: 0,
     hasFineDisplayDevice: false,
-    instrumentType: InstrumentType.SingleRange
+    instrumentType: InstrumentType.SingleRange,
+    zeroSettingMechanisms: [],
   };
 
   const context = VerificationContext.InitialVerification;
 
   // Helpers to generate valid passing observations
   const getPassingWeighing = (): WeighingPerformanceObservation[] => [
-    { sequenceIndex: 0, load: 1000, indicatedValue: 1000, additionalLoad: 1.5, zeroError: 0.5, loadingDirection: 'increasing' }
+    { sequenceIndex: 0, load: 100, indicatedValue: 100, additionalLoad: 2.5, zeroError: 0, loadingDirection: 'increasing' },
+    { sequenceIndex: 1, load: 2500, indicatedValue: 2500, additionalLoad: 2.5, zeroError: 0, loadingDirection: 'increasing' },
+    { sequenceIndex: 2, load: 5000, indicatedValue: 5000, additionalLoad: 2.5, zeroError: 0, loadingDirection: 'increasing' },
+    { sequenceIndex: 3, load: 10000, indicatedValue: 10000, additionalLoad: 2.5, zeroError: 0, loadingDirection: 'increasing' },
+    { sequenceIndex: 4, load: 15000, indicatedValue: 15000, additionalLoad: 2.5, zeroError: 0, loadingDirection: 'increasing' },
+    { sequenceIndex: 5, load: 10000, indicatedValue: 10000, additionalLoad: 2.5, zeroError: 0, loadingDirection: 'decreasing' },
+    { sequenceIndex: 6, load: 5000, indicatedValue: 5000, additionalLoad: 2.5, zeroError: 0, loadingDirection: 'decreasing' },
+    { sequenceIndex: 7, load: 2500, indicatedValue: 2500, additionalLoad: 2.5, zeroError: 0, loadingDirection: 'decreasing' },
+    { sequenceIndex: 8, load: 100, indicatedValue: 100, additionalLoad: 2.5, zeroError: 0, loadingDirection: 'decreasing' },
   ];
 
   const getFailingWeighing = (): WeighingPerformanceObservation[] => [
@@ -40,11 +49,17 @@ describe('End-to-End Orchestration Service (R76 Engine)', () => {
   });
 
   const getPassingEccentric = (): EccentricLoadingObservation[] => [
-    { positionId: '1', appliedLoad: 5000, indicatedValue: 5000, additionalLoad: 2.5, zeroError: 0, autoZeroOrTrackingDisabled: true }
+    { positionId: '1', appliedLoad: 5000, indicatedValue: 5000, additionalLoad: 2.5, zeroError: 0, autoZeroOrTrackingDisabled: true },
+    { positionId: '2', appliedLoad: 5000, indicatedValue: 5000, additionalLoad: 2.5, zeroError: 0, autoZeroOrTrackingDisabled: true },
+    { positionId: '3', appliedLoad: 5000, indicatedValue: 5000, additionalLoad: 2.5, zeroError: 0, autoZeroOrTrackingDisabled: true },
+    { positionId: '4', appliedLoad: 5000, indicatedValue: 5000, additionalLoad: 2.5, zeroError: 0, autoZeroOrTrackingDisabled: true },
   ];
 
   const getRequiresRetestEccentric = (): EccentricLoadingObservation[] => [
-    { positionId: '1', appliedLoad: 5000, indicatedValue: 5005, additionalLoad: 0, zeroError: 0, autoZeroOrTrackingDisabled: true }
+    { positionId: '1', appliedLoad: 5000, indicatedValue: 5005, additionalLoad: 0, zeroError: 0, autoZeroOrTrackingDisabled: true },
+    { positionId: '2', appliedLoad: 5000, indicatedValue: 5000, additionalLoad: 2.5, zeroError: 0, autoZeroOrTrackingDisabled: true },
+    { positionId: '3', appliedLoad: 5000, indicatedValue: 5000, additionalLoad: 2.5, zeroError: 0, autoZeroOrTrackingDisabled: true },
+    { positionId: '4', appliedLoad: 5000, indicatedValue: 5000, additionalLoad: 2.5, zeroError: 0, autoZeroOrTrackingDisabled: true },
   ];
 
   it('evaluates all 3 applicable tests supplied and passing → overall PASS', () => {
@@ -150,5 +165,68 @@ describe('End-to-End Orchestration Service (R76 Engine)', () => {
     const run2 = evaluateInstrumentCompliance(baseInst, context, obs);
     
     expect(run1).toEqual(run2);
+  });
+
+  describe('Eccentric Loading Completeness Validation', () => {
+    it('prevents overall PASS and marks incomplete when only 1 position is tested on 4-point instrument', () => {
+      const obs: TestObservations = {
+        weighingPerformance: getPassingWeighing(),
+        repeatability: getPassingRepeatability(),
+        eccentricLoading: [
+          { positionId: '1', appliedLoad: 5000, indicatedValue: 5000, additionalLoad: 2.5, zeroError: 0, autoZeroOrTrackingDisabled: true },
+        ],
+      };
+
+      const res = evaluateInstrumentCompliance(baseInst, context, obs);
+      expect(res.overallOutcome).toBe(OverallOutcome.Incomplete);
+      const eccentricTest = res.evaluatedTests.find(t => t.testType === TestType.EccentricLoading);
+      expect(eccentricTest?.status).toBe('incomplete');
+      expect(eccentricTest?.errorMessage).toContain('Missing 3 required position(s)');
+      expect(eccentricTest?.errorMessage).toContain('Position 2, Position 3, Position 4');
+    });
+
+    it('prevents overall PASS and marks incomplete when only 2 positions are tested on 3-point instrument', () => {
+      const threePointInst: Instrument = {
+        ...baseInst,
+        numberOfSupportPoints: 3,
+      };
+
+      const obs: TestObservations = {
+        weighingPerformance: getPassingWeighing(),
+        repeatability: getPassingRepeatability(),
+        eccentricLoading: [
+          { positionId: '1', appliedLoad: 5000, indicatedValue: 5000, additionalLoad: 2.5, zeroError: 0, autoZeroOrTrackingDisabled: true },
+          { positionId: '2', appliedLoad: 5000, indicatedValue: 5000, additionalLoad: 2.5, zeroError: 0, autoZeroOrTrackingDisabled: true },
+        ],
+      };
+
+      const res = evaluateInstrumentCompliance(threePointInst, context, obs);
+      expect(res.overallOutcome).toBe(OverallOutcome.Incomplete);
+      const eccentricTest = res.evaluatedTests.find(t => t.testType === TestType.EccentricLoading);
+      expect(eccentricTest?.status).toBe('incomplete');
+      expect(eccentricTest?.errorMessage).toContain('Missing 1 required position(s): Position 3');
+    });
+
+    it('produces overall PASS when all 3 positions are tested on 3-point instrument', () => {
+      const threePointInst: Instrument = {
+        ...baseInst,
+        numberOfSupportPoints: 3,
+      };
+
+      const obs: TestObservations = {
+        weighingPerformance: getPassingWeighing(),
+        repeatability: getPassingRepeatability(),
+        eccentricLoading: [
+          { positionId: '1', appliedLoad: 5000, indicatedValue: 5000, additionalLoad: 2.5, zeroError: 0, autoZeroOrTrackingDisabled: true },
+          { positionId: '2', appliedLoad: 5000, indicatedValue: 5000, additionalLoad: 2.5, zeroError: 0, autoZeroOrTrackingDisabled: true },
+          { positionId: '3', appliedLoad: 5000, indicatedValue: 5000, additionalLoad: 2.5, zeroError: 0, autoZeroOrTrackingDisabled: true },
+        ],
+      };
+
+      const res = evaluateInstrumentCompliance(threePointInst, context, obs);
+      expect(res.overallOutcome).toBe(OverallOutcome.Pass);
+      const eccentricTest = res.evaluatedTests.find(t => t.testType === TestType.EccentricLoading);
+      expect(eccentricTest?.status).toBe('passed');
+    });
   });
 });

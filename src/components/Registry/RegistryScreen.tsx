@@ -4,7 +4,7 @@ import { type FormEvent, useEffect, useState } from 'react';
 
 import { InstrumentSessionActions } from '@/components/Registry/InstrumentSessionActions';
 import { ComplianceIcon } from '@/components/ui/ComplianceIcon';
-import { Card, Field, Select, TextInput } from '@/components/ui/FormField';
+import { Card, Checkbox, Field, Select, TextInput } from '@/components/ui/FormField';
 
 interface ManufacturerRecord {
   id: string;
@@ -21,6 +21,7 @@ interface InstrumentRecord {
   serialNumber: string | null;
   accuracyClass: string;
   instrumentType: string;
+  indicationType: string | null;
   max: string;
   min: string;
   e: string;
@@ -43,6 +44,12 @@ const INSTRUMENT_TYPES = [
   { value: 'SINGLE_RANGE', label: 'Single range' },
   { value: 'MULTI_RANGE', label: 'Multi-range' },
   { value: 'MULTI_INTERVAL', label: 'Multi-interval' },
+];
+
+const INDICATION_TYPES = [
+  { value: '', label: 'Unspecified' },
+  { value: 'DIGITAL', label: 'Digital' },
+  { value: 'ANALOG', label: 'Analog' },
 ];
 
 function apiError(payload: ApiErrorPayload, status: number): string {
@@ -101,7 +108,12 @@ function Message({ children, tone }: { children: string; tone: 'error' | 'succes
   );
 }
 
-export function RegistryScreen() {
+interface RegistryScreenProps {
+  userRole?: string;
+}
+
+export function RegistryScreen({ userRole }: RegistryScreenProps = {}) {
+  const [currentRole, setCurrentRole] = useState<string | undefined>(userRole);
   const [manufacturers, setManufacturers] = useState<ManufacturerRecord[]>([]);
   const [instruments, setInstruments] = useState<InstrumentRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -110,6 +122,30 @@ export function RegistryScreen() {
   const [instrumentMessage, setInstrumentMessage] = useState<{ tone: 'error' | 'success'; text: string } | null>(null);
   const [savingManufacturer, setSavingManufacturer] = useState(false);
   const [savingInstrument, setSavingInstrument] = useState(false);
+  const [deletingInstrument, setDeletingInstrument] = useState<string | null>(null);
+
+  async function deleteInstrument(instrumentId: string) {
+    if (!confirm('Are you sure you want to delete this instrument? This will permanently delete all its sessions, observations, results, and related records. This action cannot be undone.')) return;
+    setDeletingInstrument(instrumentId);
+    setInstrumentMessage(null);
+    try {
+      const response = await fetch(`/api/instruments/${instrumentId}`, { method: 'DELETE' });
+      if (!response.ok) {
+        let msg = `Failed to delete instrument (Status ${response.status})`;
+        try {
+          const payload = await response.json();
+          msg = payload.error || msg;
+        } catch {}
+        throw new Error(msg);
+      }
+      setInstrumentMessage({ tone: 'success', text: 'Instrument deleted successfully.' });
+      refreshRegistry();
+    } catch (err) {
+      setInstrumentMessage({ tone: 'error', text: err instanceof Error ? err.message : 'Unable to delete instrument.' });
+    } finally {
+      setDeletingInstrument(null);
+    }
+  }
 
   const [manufacturerForm, setManufacturerForm] = useState({
     name: '',
@@ -122,11 +158,13 @@ export function RegistryScreen() {
     serialNumber: '',
     accuracyClass: 'III',
     instrumentType: 'SINGLE_RANGE',
+    indicationType: '',
     max: '',
     min: '',
     e: '',
     d: '',
     numberOfSupportPoints: '4',
+    zeroSettingMechanisms: [] as string[],
   });
 
   async function loadRegistry() {
@@ -144,6 +182,21 @@ export function RegistryScreen() {
       setLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (!userRole) {
+      fetch('/api/auth/session')
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.authenticated && data.user?.role) {
+            setCurrentRole(data.user.role);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [userRole]);
+
+  const isAdmin = (userRole ?? currentRole) === 'ADMIN';
 
   useEffect(() => {
     let active = true;
@@ -222,11 +275,13 @@ export function RegistryScreen() {
           serialNumber: instrumentForm.serialNumber || null,
           accuracyClass: instrumentForm.accuracyClass,
           instrumentType: instrumentForm.instrumentType,
+          indicationType: instrumentForm.indicationType || null,
           max: instrumentForm.max,
           min: instrumentForm.min,
           e: instrumentForm.e,
           d: instrumentForm.d,
           numberOfSupportPoints: instrumentForm.numberOfSupportPoints,
+          zeroSettingMechanisms: instrumentForm.zeroSettingMechanisms,
         }),
       });
       const payload = await responseBody(response);
@@ -238,10 +293,12 @@ export function RegistryScreen() {
         ...current,
         model: '',
         serialNumber: '',
+        indicationType: '',
         max: '',
         min: '',
         e: '',
         d: '',
+        zeroSettingMechanisms: [],
       }));
       setInstrumentMessage({ tone: 'success', text: 'Instrument registered successfully.' });
     } catch (error) {
@@ -299,6 +356,9 @@ export function RegistryScreen() {
               <Field label="Instrument Type">
                 <Select value={instrumentForm.instrumentType} onChange={(instrumentType) => setInstrumentForm((current) => ({ ...current, instrumentType }))} options={INSTRUMENT_TYPES} />
               </Field>
+              <Field label="Indication Type">
+                <Select value={instrumentForm.indicationType} onChange={(indicationType) => setInstrumentForm((current) => ({ ...current, indicationType }))} options={INDICATION_TYPES} />
+              </Field>
               <Field label="Max (kg)">
                 <TextInput type="number" step="any" value={instrumentForm.max} onChange={(max) => setInstrumentForm((current) => ({ ...current, max }))} placeholder="30" />
               </Field>
@@ -314,6 +374,59 @@ export function RegistryScreen() {
               <Field label="Support Points">
                 <TextInput type="number" value={instrumentForm.numberOfSupportPoints} onChange={(numberOfSupportPoints) => setInstrumentForm((current) => ({ ...current, numberOfSupportPoints }))} placeholder="4" />
               </Field>
+            </div>
+            <div className="grid gap-2">
+              <span className="text-[0.72rem] font-semibold text-[#344054]">Zero-Setting Mechanisms (Optional)</span>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 rounded-md border border-[#E4EAF0] bg-[#F8FAFC] p-3">
+                <Checkbox
+                  label="Non-Automatic"
+                  checked={instrumentForm.zeroSettingMechanisms.includes('NON_AUTOMATIC')}
+                  onChange={(checked) => {
+                    setInstrumentForm((current) => {
+                      const next = new Set(current.zeroSettingMechanisms);
+                      if (checked) next.add('NON_AUTOMATIC');
+                      else next.delete('NON_AUTOMATIC');
+                      return { ...current, zeroSettingMechanisms: Array.from(next) };
+                    });
+                  }}
+                />
+                <Checkbox
+                  label="Semi-Automatic"
+                  checked={instrumentForm.zeroSettingMechanisms.includes('SEMI_AUTOMATIC')}
+                  onChange={(checked) => {
+                    setInstrumentForm((current) => {
+                      const next = new Set(current.zeroSettingMechanisms);
+                      if (checked) next.add('SEMI_AUTOMATIC');
+                      else next.delete('SEMI_AUTOMATIC');
+                      return { ...current, zeroSettingMechanisms: Array.from(next) };
+                    });
+                  }}
+                />
+                <Checkbox
+                  label="Automatic"
+                  checked={instrumentForm.zeroSettingMechanisms.includes('AUTOMATIC')}
+                  onChange={(checked) => {
+                    setInstrumentForm((current) => {
+                      const next = new Set(current.zeroSettingMechanisms);
+                      if (checked) next.add('AUTOMATIC');
+                      else next.delete('AUTOMATIC');
+                      return { ...current, zeroSettingMechanisms: Array.from(next) };
+                    });
+                  }}
+                />
+                <Checkbox
+                  label="Zero-Tracking"
+                  checked={instrumentForm.zeroSettingMechanisms.includes('ZERO_TRACKING')}
+                  onChange={(checked) => {
+                    setInstrumentForm((current) => {
+                      const next = new Set(current.zeroSettingMechanisms);
+                      if (checked) next.add('ZERO_TRACKING');
+                      else next.delete('ZERO_TRACKING');
+                      return { ...current, zeroSettingMechanisms: Array.from(next) };
+                    });
+                  }}
+                />
+              </div>
             </div>
             {instrumentMessage && <Message tone={instrumentMessage.tone}>{instrumentMessage.text}</Message>}
             <div className="flex justify-end">
@@ -359,8 +472,18 @@ export function RegistryScreen() {
                     <td className="px-3 py-3 font-mono text-[0.72rem] text-[#344054]">{item.e} kg</td>
                     <td className="px-3 py-3 font-mono text-[0.72rem] text-[#344054]">{item.d} kg</td>
                     <td className="px-3 py-3 text-[0.7rem] text-[#667085]">{item.instrumentType.replaceAll('_', ' ')}</td>
-                    <td className="px-3 py-3 text-right">
-                      <InstrumentSessionActions instrumentId={item.id} />
+                    <td className="px-3 py-3 text-right flex gap-2 justify-end items-start">
+                      <InstrumentSessionActions instrumentId={item.id} isAdmin={isAdmin} />
+                      {isAdmin && (
+                        <button 
+                          type="button"
+                          onClick={() => deleteInstrument(item.id)} 
+                          disabled={deletingInstrument === item.id} 
+                          className="rounded-[5px] border border-[#F3C7C7] bg-[#FEF3F2] px-2.5 py-1.5 text-[0.68rem] font-bold text-[#B42318] hover:bg-[#FCE8E8] disabled:opacity-50"
+                        >
+                          {deletingInstrument === item.id ? 'Deleting...' : 'Delete'}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

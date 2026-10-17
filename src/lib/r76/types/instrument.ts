@@ -42,6 +42,30 @@ export enum InstrumentType {
   SingleRange = 'single_range',
 }
 
+// ─── Indication Type ──────────────────────────────────────────────
+
+/**
+ * Type of indication (display).
+ * Digital vs Analog indication affects discrimination test applicability.
+ */
+export enum IndicationType {
+  Digital = 'digital',
+  Analog = 'analog',
+}
+
+// ─── Zero-Setting Mechanism ───────────────────────────────────────
+
+/**
+ * Type of zero-setting mechanism.
+ * Determines the zero-setting accuracy test procedure. (R76-1 A.4.2.3)
+ */
+export enum ZeroSettingMechanism {
+  NonAutomatic = 'non_automatic',
+  SemiAutomatic = 'semi_automatic',
+  Automatic = 'automatic',
+  ZeroTracking = 'zero_tracking',
+}
+
 // ─── Instrument Descriptor ────────────────────────────────────────
 
 /**
@@ -133,4 +157,16 @@ export interface Instrument {
 
   /** Weighing range type. Only 'single_range' is supported in this prototype. */
   instrumentType: InstrumentType;
+
+  /** 
+   * Type of display indication (digital or analog).
+   * Determines which discrimination test procedure applies.
+   * Nullable to avoid breaking existing legacy instruments.
+   */
+  indicationType?: IndicationType;
+
+  /**
+   * Supported zero-setting mechanisms.
+   */
+  zeroSettingMechanisms?: ZeroSettingMechanism[];
 }

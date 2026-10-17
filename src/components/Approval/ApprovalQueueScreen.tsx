@@ -5,6 +5,8 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { ComplianceTracePanel } from '@/components/Evaluation/ComplianceTracePanel';
 import type { SavedTestResultResponse } from '@/components/Evaluation/result-persistence';
+import { selectTests } from '@/lib/r76/test-selection';
+import { VerificationContext, normalizeVerificationContext } from '@/lib/r76/types';
 
 type QueueMode = 'review' | 'approval';
 type QueueStatus = 'PENDING_REVIEW' | 'PENDING_APPROVAL';
@@ -14,6 +16,7 @@ interface SessionRecord {
   instrumentId: string;
   status: QueueStatus;
   verificationContext: string;
+  revisionNumber: number;
   createdAt: string;
 }
 
@@ -24,10 +27,18 @@ interface InstrumentRecord {
   serialNumber: string | null;
   accuracyClass: string;
   instrumentType: string;
+  indicationType?: string | null;
   max: string;
   min: string;
   e: string;
   d: string;
+  numberOfSupportPoints?: number;
+  additiveTareEffect?: boolean;
+  hasAutoZeroOrTracking?: boolean;
+  hasInitialZeroSettingDevice?: boolean;
+  initialZeroSettingRange?: string;
+  hasFineDisplayDevice?: boolean;
+  zeroSettingMechanisms?: string[];
 }
 
 interface ApprovalRecord {
@@ -46,6 +57,8 @@ interface QueueItem {
   ready: boolean;
   readinessMessage: string | null;
 }
+
+
 
 function apiError(payload: unknown, fallback: string): string {
   return typeof payload === 'object' && payload !== null && 'error' in payload &&
@@ -66,17 +79,67 @@ async function loadQueueItem(session: SessionRecord): Promise<QueueItem> {
     jsonRequest(`/api/approvals?testSessionId=${encodeURIComponent(session.id)}`),
     jsonRequest(`/api/test-results/freshness?testSessionId=${encodeURIComponent(session.id)}`),
   ]);
+  const inst = instrument as InstrumentRecord;
   const freshnessItems = freshness as Array<{ testType: string; state: string }>;
-  const notCurrent = freshnessItems.filter(({ state }) => state !== 'CURRENT');
+
+  const vContext = normalizeVerificationContext(session.verificationContext);
+
+  const testSelections = selectTests(
+    {
+      id: inst.id,
+      manufacturer: inst.manufacturer?.name ?? '',
+      model: inst.model,
+      serialNumber: inst.serialNumber ?? undefined,
+      accuracyClass: inst.accuracyClass as any,
+      instrumentType: inst.instrumentType?.toLowerCase() as any,
+      indicationType: inst.indicationType ? (inst.indicationType.toLowerCase() as any) : undefined,
+      max: Number(inst.max) || 0,
+      min: Number(inst.min) || 0,
+      e: Number(inst.e) || 0,
+      d: Number(inst.d) || 0,
+      numberOfSupportPoints: inst.numberOfSupportPoints ? Number(inst.numberOfSupportPoints) : 4,
+      additiveTareEffect: Boolean(inst.additiveTareEffect),
+      hasAutoZeroOrTracking: Boolean(inst.hasAutoZeroOrTracking),
+      hasInitialZeroSettingDevice: Boolean(inst.hasInitialZeroSettingDevice),
+      initialZeroSettingRange: Number(inst.initialZeroSettingRange) || 0,
+      hasFineDisplayDevice: Boolean(inst.hasFineDisplayDevice),
+      zeroSettingMechanisms: inst.zeroSettingMechanisms ?? [],
+    } as any,
+    vContext
+  );
+
+  const applicableTypes = new Set(
+    testSelections.filter((s) => s.isApplicable).map((s) => s.testType.toUpperCase())
+  );
+
+  const applicableFreshness = freshnessItems.filter((item) => applicableTypes.has(item.testType));
+  const notCurrent = applicableFreshness.filter(({ state }) => state !== 'CURRENT');
+  const missingApplicable = Array.from(applicableTypes).filter(
+    (testType) => !freshnessItems.some((item) => item.testType === testType)
+  );
+
+  const ready =
+    applicableTypes.size > 0 &&
+    notCurrent.length === 0 &&
+    missingApplicable.length === 0;
+
+  const failureReasons: string[] = [
+    ...notCurrent.map(({ testType, state }) => `${testType.replaceAll('_', ' ')}: ${state}`),
+    ...missingApplicable.map((testType) => `${testType.replaceAll('_', ' ')}: MISSING`),
+  ];
+
   return {
     session,
-    instrument: instrument as InstrumentRecord,
+    instrument: inst,
     results: results as SavedTestResultResponse[],
     approvals: approvals as ApprovalRecord[],
-    ready: freshnessItems.length === 3 && notCurrent.length === 0,
-    readinessMessage: notCurrent.length
-      ? `${notCurrent.map(({ testType, state }) => `${testType.replaceAll('_', ' ')}: ${state}`).join('; ')}`
-      : freshnessItems.length === 3 ? null : 'The complete server readiness state is unavailable.',
+    ready,
+    readinessMessage:
+      failureReasons.length > 0
+        ? failureReasons.join('; ')
+        : applicableTypes.size === 0
+        ? 'No applicable tests identified for this instrument configuration.'
+        : null,
   };
 }
 
@@ -153,7 +216,13 @@ export function ApprovalQueueScreen({ mode }: { mode: QueueMode }) {
             <div>
               <p className="m-0 text-[0.6rem] font-bold uppercase tracking-[0.12em] text-[#0A66C2]">{label(session.status)}</p>
               <h2 className="m-0 mt-1 text-[1rem] font-bold text-[#1D2226]">{instrument.manufacturer.name} {instrument.model}</h2>
-              <p className="m-0 mt-1 font-mono text-[0.62rem] text-[#667085]">Session {session.id}</p>
+              <div className="flex gap-2 items-center mt-1">
+                <p className="m-0 font-mono text-[0.62rem] text-[#667085]">Session {session.id}</p>
+                <span className="rounded bg-[#EAF3FC] px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-wider text-[#004182]">Version {session.revisionNumber}</span>
+                {session.revisionNumber > 1 && (
+                  <span className="rounded bg-[#FFF0E6] px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-wider text-[#C05600]">Resubmitted</span>
+                )}
+              </div>
             </div>
             <Link href={`/evaluate/${encodeURIComponent(instrument.id)}?sessionId=${encodeURIComponent(session.id)}`} className="rounded border border-[#A9C9E8] bg-[#F6FAFE] px-3 py-2 text-[0.68rem] font-bold text-[#0A66C2] no-underline">Open read-only evaluation</Link>
           </header>
@@ -175,10 +244,27 @@ export function ApprovalQueueScreen({ mode }: { mode: QueueMode }) {
                 </ol>
               </section>
               {!ready && <p role="alert" className="m-0 rounded border border-[#FEDF89] bg-[#FFFAEB] p-3 text-[0.68rem] text-[#B54708]">Server readiness check: {readinessMessage ?? 'not current'}</p>}
-              <label className="grid gap-1 text-[0.68rem] font-semibold text-[#344054]">Optional comment<textarea value={comments[session.id] ?? ''} onChange={(event) => setComments((current) => ({ ...current, [session.id]: event.target.value }))} rows={3} className="rounded border border-[#BFCEDC] px-3 py-2 font-normal outline-none focus:border-[#0A66C2]" /></label>
+              <label className="grid gap-1 text-[0.68rem] font-semibold text-[#344054]">Comment (Required for Return/Reject)<textarea value={comments[session.id] ?? ''} onChange={(event) => setComments((current) => ({ ...current, [session.id]: event.target.value }))} rows={3} className="rounded border border-[#BFCEDC] px-3 py-2 font-normal outline-none focus:border-[#0A66C2]" /></label>
               <div className="flex flex-wrap gap-2">
-                <button type="button" disabled={!ready || actingId === session.id} onClick={() => void decide(session.id, true)} className="rounded bg-[#0A66C2] px-4 py-2 text-[0.72rem] font-bold text-white disabled:bg-[#98A2B3]">{mode === 'review' ? 'Approve for Final Approval' : 'Final Approve'}</button>
+                <button type="button" disabled={!ready || actingId === session.id} onClick={() => void decide(session.id, true)} className="rounded bg-[#0A66C2] px-4 py-2 text-[0.72rem] font-bold text-white disabled:bg-[#98A2B3]">{mode === 'review' ? 'Forward to Final Approval' : 'Approve & Finalize Report'}</button>
                 <button type="button" disabled={actingId === session.id} onClick={() => void decide(session.id, false)} className="rounded border border-[#FDA29B] bg-white px-4 py-2 text-[0.72rem] font-bold text-[#B42318] disabled:opacity-50">{mode === 'review' ? 'Reject' : 'Final Reject'}</button>
+                <button type="button" disabled={actingId === session.id} onClick={() => {
+                  setActingId(session.id);
+                  jsonRequest('/api/approvals', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      sessionId: session.id,
+                      action: 'RETURN',
+                      comments: comments[session.id]?.trim()
+                    }),
+                  }).then(() => {
+                    setMessage('Session returned for correction.');
+                    load();
+                  }).catch((err) => {
+                    setError(err instanceof Error ? err.message : 'Unable to return session.');
+                  }).finally(() => setActingId(null));
+                }} className="rounded border border-[#F3C7C7] bg-[#FEF3F2] px-4 py-2 text-[0.72rem] font-bold text-[#B42318] disabled:opacity-50">Return for Correction</button>
               </div>
             </div>
             <section className="grid content-start gap-3">

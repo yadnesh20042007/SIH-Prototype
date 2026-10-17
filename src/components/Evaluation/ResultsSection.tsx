@@ -6,6 +6,8 @@ import type { OrchestrationResult, EvaluatedTest } from '@/lib/r76/engine';
 import type { WeighingPerformanceTestResult } from '@/lib/r76/calculations/weighing';
 import type { RepeatabilityTestResult } from '@/lib/r76/calculations/repeatability';
 import type { EccentricityTestResult } from '@/lib/r76/calculations/eccentricity';
+import type { DiscriminationTestResult } from '@/lib/r76/calculations/discrimination';
+import type { ZeroSettingAccuracyTestResult } from '@/lib/r76/calculations/zero-setting';
 import { ComplianceIcon } from '@/components/ui/ComplianceIcon';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { ComplianceTracePanel } from './ComplianceTracePanel';
@@ -27,6 +29,8 @@ const TEST_TYPE_LABEL: Record<TestType, string> = {
   [TestType.WeighingPerformance]: 'Weighing Performance',
   [TestType.Repeatability]: 'Repeatability',
   [TestType.EccentricLoading]: 'Eccentric Loading',
+  [TestType.Discrimination]: 'Discrimination',
+  [TestType.ZeroSettingAccuracy]: 'Zero-Setting Accuracy',
 };
 
 export function ResultsSection({
@@ -212,6 +216,8 @@ function TestResultCard({ test }: { test: EvaluatedTest }) {
         {test.result && test.testType === TestType.WeighingPerformance && <WeighingResultDetail result={test.result as WeighingPerformanceTestResult} />}
         {test.result && test.testType === TestType.Repeatability && <RepeatabilityResultDetail result={test.result as RepeatabilityTestResult} />}
         {test.result && test.testType === TestType.EccentricLoading && <EccentricityResultDetail result={test.result as EccentricityTestResult} />}
+        {test.result && test.testType === TestType.Discrimination && <DiscriminationResultDetail result={test.result as DiscriminationTestResult} />}
+        {test.result && test.testType === TestType.ZeroSettingAccuracy && <ZeroSettingResultDetail result={test.result as ZeroSettingAccuracyTestResult} />}
       </div>
     </section>
   );
@@ -274,6 +280,56 @@ function EccentricityResultDetail({ result }: { result: EccentricityTestResult }
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+function DiscriminationResultDetail({ result }: { result: DiscriminationTestResult }) {
+  return (
+    <div className="space-y-3">
+      <Summary explanation={result.explanation} reference={result.r76Reference}>
+        <Metric label="Maximum absolute error" value={`${result.maxAbsoluteError} kg`} />
+      </Summary>
+      {result.observationResults.map((observation, index) => (
+        <div key={index} className="rounded-md border border-[#D9E2EC]">
+          <RowHeader label={`Observation ${index + 1}`} status={observation.outcome} />
+          <div className="p-3">
+            <Comparison
+              leftLabel="Calculated Error"
+              leftValue={`${observation.calculatedError} kg`}
+              rightLabel="Permissible Error"
+              rightValue="0 kg"
+            />
+            <Explanation value={observation.explanation} />
+            <Reference value={observation.r76Reference} />
+            {observation.trace && <ComplianceTracePanel traces={observation.trace} />}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ZeroSettingResultDetail({ result }: { result: ZeroSettingAccuracyTestResult }) {
+  return (
+    <div className="space-y-3">
+      <Summary explanation={result.explanation} reference={result.r76Reference}>
+        <Metric label="Maximum absolute error" value={`${result.maxAbsoluteError} kg`} />
+      </Summary>
+      <div className="rounded-md border border-[#D9E2EC]">
+        <RowHeader label="Zero-Setting Observation" status={result.observationResults[0].outcome} />
+        <div className="p-3">
+          <Comparison
+            leftLabel="Calculated Error E0"
+            leftValue={`${result.observationResults[0].calculatedError} kg`}
+            rightLabel="Permissible Error"
+            rightValue={`±${result.observationResults[0].mpe} kg`}
+          />
+          <Explanation value={result.observationResults[0].explanation} />
+          <Reference value={result.observationResults[0].r76Reference} />
+          {result.observationResults[0].trace && <ComplianceTracePanel traces={result.observationResults[0].trace} />}
+        </div>
+      </div>
     </div>
   );
 }

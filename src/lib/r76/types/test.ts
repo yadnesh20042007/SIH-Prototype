@@ -31,6 +31,8 @@ export enum TestType {
   WeighingPerformance = 'weighing_performance',
   Repeatability       = 'repeatability',
   EccentricLoading    = 'eccentric_loading',
+  Discrimination      = 'discrimination',
+  ZeroSettingAccuracy = 'zero_setting_accuracy',
 }
 
 // ─── Base test session ────────────────────────────────────────────
@@ -149,7 +151,21 @@ export interface EccentricLoadingTest extends BaseTestSession {
  *   }
  * }
  */
+export interface DiscriminationTest extends BaseTestSession {
+  type: TestType.Discrimination;
+  observation?: import('./observations').DiscriminationObservationPoint[];
+  result?: import('./results').TestComplianceResult;
+}
+
+export interface ZeroSettingAccuracyTest extends BaseTestSession {
+  type: TestType.ZeroSettingAccuracy;
+  observation?: import('./observations').ZeroSettingObservation;
+  result?: import('./results').TestComplianceResult;
+}
+
 export type R76Test =
   | WeighingPerformanceTest
   | RepeatabilityTest
-  | EccentricLoadingTest;
+  | EccentricLoadingTest
+  | DiscriminationTest
+  | ZeroSettingAccuracyTest;

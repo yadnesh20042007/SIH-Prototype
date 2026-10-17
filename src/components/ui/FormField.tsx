@@ -2,22 +2,56 @@
 
 import type { ChangeEvent, ReactNode } from 'react';
 
-interface FieldProps { label: string; hint?: string; children: ReactNode; className?: string; }
+interface FieldProps {
+  label: string;
+  hint?: string;
+  children: ReactNode;
+  className?: string;
+  error?: string;
+}
 
-export function Field({ label, hint, children, className }: FieldProps) {
+export function Field({ label, hint, children, className, error }: FieldProps) {
   return (
     <label className={`flex min-w-0 flex-col gap-1.5 ${className ?? ''}`}>
       <span className="text-[0.7rem] font-semibold leading-tight text-[#344054]">{label}</span>
       {children}
-      {hint && <span className="text-[0.66rem] leading-snug text-[#7B8794]">{hint}</span>}
+      {error ? (
+        <span role="alert" className="text-[0.66rem] font-medium leading-snug text-[#B42318]">
+          {error}
+        </span>
+      ) : (
+        hint && <span className="text-[0.66rem] leading-snug text-[#7B8794]">{hint}</span>
+      )}
     </label>
   );
 }
 
-interface TextInputProps { value: string; onChange: (value: string) => void; type?: 'text' | 'number'; placeholder?: string; step?: string; disabled?: boolean; }
+interface TextInputProps {
+  value: string;
+  onChange: (value: string) => void;
+  type?: 'text' | 'number';
+  placeholder?: string;
+  step?: string;
+  disabled?: boolean;
+  hasError?: boolean;
+}
 
-export function TextInput({ value, onChange, type = 'text', placeholder, step, disabled }: TextInputProps) {
-  return <input type={type} value={value} step={step} placeholder={placeholder} disabled={disabled} onChange={(event: ChangeEvent<HTMLInputElement>) => onChange(event.target.value)} className="h-9 w-full rounded-[5px] border border-[#C9D5E1] bg-white px-2.5 text-[0.78rem] text-[#1D2226] shadow-[inset_0_1px_1px_rgba(16,24,40,0.03)] transition-[border-color,box-shadow] placeholder:text-[#98A2B3] hover:border-[#AEBECD] disabled:cursor-not-allowed disabled:bg-[#F2F4F7] disabled:text-[#667085] focus:border-[#0A66C2] focus:outline-none focus:ring-[3px] focus:ring-[#0A66C2]/10" />;
+export function TextInput({ value, onChange, type = 'text', placeholder, step, disabled, hasError }: TextInputProps) {
+  return (
+    <input
+      type={type}
+      value={value}
+      step={step}
+      placeholder={placeholder}
+      disabled={disabled}
+      onChange={(event: ChangeEvent<HTMLInputElement>) => onChange(event.target.value)}
+      className={`h-9 w-full rounded-[5px] border ${
+        hasError
+          ? 'border-[#FDA29B] bg-[#FFF6F5] text-[#B42318] focus:border-[#D92D20] focus:ring-[#D92D20]/10'
+          : 'border-[#C9D5E1] bg-white text-[#1D2226] focus:border-[#0A66C2] focus:ring-[#0A66C2]/10'
+      } px-2.5 text-[0.78rem] shadow-[inset_0_1px_1px_rgba(16,24,40,0.03)] transition-[border-color,box-shadow] placeholder:text-[#98A2B3] hover:border-[#AEBECD] disabled:cursor-not-allowed disabled:bg-[#F2F4F7] disabled:text-[#667085] focus:outline-none focus:ring-[3px]`}
+    />
+  );
 }
 
 interface SelectOption { value: string; label: string; }

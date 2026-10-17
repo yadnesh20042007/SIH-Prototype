@@ -10,6 +10,8 @@ const { rulesetVersionMock, testSessionMock, userMock } = vi.hoisted(() => ({
     findUnique: vi.fn(),
     update: vi.fn(),
     updateMany: vi.fn(),
+    delete: vi.fn(),
+    deleteMany: vi.fn(),
   },
   userMock: {
     findFirst: vi.fn(),
@@ -21,8 +23,16 @@ vi.mock('@/lib/prisma', () => ({
     rulesetVersion: rulesetVersionMock,
     testSession: testSessionMock,
     user: userMock,
+    $transaction: vi.fn(async (cb) => cb(prismaMock)),
   },
 }));
+
+const prismaMock = {
+  approval: { deleteMany: vi.fn() },
+  report: { deleteMany: vi.fn() },
+  auditLog: { updateMany: vi.fn(), create: vi.fn() },
+  testSession: testSessionMock,
+};
 
 import {
   DatabaseConflictError,
@@ -37,6 +47,7 @@ import {
   listTestSessions,
   startTestSessionProgress,
   updateTestSession,
+  deleteTestSession,
 } from './test-session.service';
 
 const createdAt = new Date('2026-09-01T08:00:00.000Z');
@@ -52,6 +63,7 @@ const persistedSession = {
   technicianId: 'technician-1',
   reviewerId: null,
   approverId: null,
+  revisionNumber: 1,
   notes: null,
   createdAt,
   updatedAt,
@@ -269,6 +281,31 @@ describe('TestSession service unit tests (mocked Prisma)', () => {
       createdAt: '2026-09-01T08:00:00.000Z',
       updatedAt: '2026-09-02T09:30:00.000Z',
       completedAt: '2026-09-03T10:45:30.125Z',
+    });
+  });
+
+  describe('deleteTestSession', () => {
+    it('deletes a session and dependent records safely via transaction', async () => {
+      testSessionMock.findUnique.mockResolvedValue({ ...persistedSession, status: 'DRAFT' });
+      await deleteTestSession('session-1', 'admin-id');
+      
+      expect(prismaMock.approval.deleteMany).toHaveBeenCalledWith({ where: { sessionId: 'session-1' } });
+      expect(prismaMock.report.deleteMany).toHaveBeenCalledWith({ where: { sessionId: 'session-1' } });
+      expect(prismaMock.auditLog.updateMany).toHaveBeenCalledWith({ where: { sessionId: 'session-1' }, data: { sessionId: null } });
+      expect(prismaMock.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ action: 'DELETE', entityId: 'session-1' })
+      }));
+      expect(prismaMock.testSession.delete).toHaveBeenCalledWith({ where: { id: 'session-1' } });
+    });
+
+    it('rejects deletion of approved sessions', async () => {
+      testSessionMock.findUnique.mockResolvedValue({ ...persistedSession, status: 'APPROVED' });
+      await expect(deleteTestSession('session-1', 'admin-id')).rejects.toBeInstanceOf(DatabaseConflictError);
+    });
+
+    it('throws not found if session does not exist', async () => {
+      testSessionMock.findUnique.mockResolvedValue(null);
+      await expect(deleteTestSession('missing', 'admin-id')).rejects.toBeInstanceOf(DatabaseNotFoundError);
     });
   });
 });

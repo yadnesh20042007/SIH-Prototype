@@ -7,6 +7,15 @@ import {
   throwMappedDatabaseError,
 } from '@/lib/db/errors';
 import { prisma } from '@/lib/prisma';
+import { selectTests } from '@/lib/r76/test-selection/engine';
+import { VerificationContext, normalizeVerificationContext } from '@/lib/r76/types';
+
+const VERIFICATION_CONTEXT_MAP: Record<string, VerificationContext> = {
+  INITIAL_VERIFICATION: VerificationContext.InitialVerification,
+  SUBSEQUENT_VERIFICATION: VerificationContext.SubsequentVerification,
+  SERVICE_INSPECTION: VerificationContext.ServiceInspection,
+  TYPE_EVALUATION: VerificationContext.TypeEvaluation,
+};
 import { publicVerificationUrl } from '@/lib/reports/public-verification-url';
 import {
   renderR76ReportPdf,
@@ -100,7 +109,23 @@ function assertEligible(session: ReportSession): void {
     session.rulesetVersionId,
     configFingerprint
   );
-  const unavailable = freshness.filter(item => item.state !== 'CURRENT');
+  const verificationContext = normalizeVerificationContext(session.verificationContext);
+
+  const applicableTestTypes = new Set(
+    selectTests({
+      ...session.instrument,
+      instrumentType: session.instrument.instrumentType.toLowerCase(),
+      indicationType: session.instrument.indicationType?.toLowerCase(),
+      zeroSettingMechanisms: session.instrument.zeroSettingMechanisms?.map((m: string) => m.toLowerCase() as any),
+      e: Number(session.instrument.e),
+      d: Number(session.instrument.d),
+      min: Number(session.instrument.min),
+      max: Number(session.instrument.max),
+    } as any, verificationContext)
+      .filter(s => s.isApplicable)
+      .map(s => s.testType.toUpperCase())
+  );
+  const unavailable = freshness.filter(item => item.state !== 'CURRENT' && applicableTestTypes.has(item.testType));
   if (unavailable.length) {
     throw new ReportEligibilityError(
       `Report generation requires CURRENT results: ${unavailable.map(item => `${item.testType}=${item.state}`).join(', ')}`
@@ -129,6 +154,8 @@ function reportData(report: Report, session: ReportSession, verificationUrl: str
         serialNumber: session.instrument.serialNumber,
         accuracyClass: session.instrument.accuracyClass,
         instrumentType: session.instrument.instrumentType,
+        indicationType: session.instrument.indicationType,
+        zeroSettingMechanisms: session.instrument.zeroSettingMechanisms,
         max: session.instrument.max.toString(),
         min: session.instrument.min.toString(),
         e: session.instrument.e.toString(),
@@ -201,7 +228,7 @@ const reportRepositoryInclude = {
   session: {
     include: {
       instrument: { include: { manufacturer: true } },
-      results: { select: { outcome: true } },
+      results: { select: { testType: true, outcome: true } },
     },
   },
 } satisfies Prisma.ReportInclude;

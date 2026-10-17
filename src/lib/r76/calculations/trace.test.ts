@@ -380,14 +380,24 @@ describe('Eccentric Loading — Compliance Trace', () => {
 
   // Guard: existing PASS/FAIL/REQUIRES_RETEST behaviour unchanged
   it('existing REQUIRES_RETEST outcome unchanged by trace addition', () => {
-    const obs = [makeObs('Pos1', 5000, 5005, 0, 0)];
+    const obs = [
+      makeObs('Pos1', 5000, 5005, 0, 0),
+      makeObs('Pos2', 5000, 5000, 2.0, 0),
+      makeObs('Pos3', 5000, 5000, 1.5, 0),
+      makeObs('Pos4', 5000, 5000, 1.0, 0),
+    ];
     const res = evaluateEccentricLoadingTest(obs, baseInstrument, initialContext, false);
     expect(res.outcome).toBe(TestOutcome.RequiresRetest);
     expect(res.retestRequired).toBe(true);
   });
 
   it('existing FAIL outcome unchanged by trace addition', () => {
-    const obs = [makeObs('Pos1', 5000, 5005, 0, 0)];
+    const obs = [
+      makeObs('Pos1', 5000, 5005, 0, 0),
+      makeObs('Pos2', 5000, 5000, 2.0, 0),
+      makeObs('Pos3', 5000, 5000, 1.5, 0),
+      makeObs('Pos4', 5000, 5000, 1.0, 0),
+    ];
     const res = evaluateEccentricLoadingTest(obs, baseInstrument, initialContext, true);
     expect(res.outcome).toBe(TestOutcome.Fail);
     expect(res.retestRequired).toBe(false);

@@ -12,6 +12,7 @@ const { serviceMock } = vi.hoisted(() => ({
   serviceMock: {
     getTestObservationById: vi.fn(),
     updateTestObservation: vi.fn(),
+    deleteTestObservation: vi.fn(),
   },
 }));
 
@@ -22,7 +23,7 @@ import {
   DatabaseForeignKeyError,
   DatabaseNotFoundError,
 } from '@/lib/db/errors';
-import { GET, PATCH } from './route';
+import { GET, PATCH, DELETE } from './route';
 
 const observationData = {
   sequenceIndex: 0, load: 10, indicatedValue: 10, zeroError: 0, loadingDirection: 'increasing',
@@ -110,5 +111,12 @@ describe('TestObservation item route unit tests (mocked service)', () => {
     const response = await GET(new Request('http://localhost'), context('observation-1'));
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: 'Internal server error' });
+  });
+
+  it('deletes an observation by ID', async () => {
+    serviceMock.deleteTestObservation.mockResolvedValue(undefined);
+    const response = await DELETE(new Request('http://localhost', { method: 'DELETE' }), context('observation-1'));
+    expect(response.status).toBe(204);
+    expect(serviceMock.deleteTestObservation).toHaveBeenCalledWith('observation-1');
   });
 });

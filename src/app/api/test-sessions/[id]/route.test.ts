@@ -13,6 +13,7 @@ const { serviceMock } = vi.hoisted(() => ({
     getTestSessionById: vi.fn(),
     startTestSessionProgress: vi.fn(),
     updateTestSession: vi.fn(),
+    deleteTestSession: vi.fn(),
   },
 }));
 
@@ -23,7 +24,7 @@ import {
   DatabaseForeignKeyError,
   DatabaseNotFoundError,
 } from '@/lib/db/errors';
-import { GET, PATCH } from './route';
+import { GET, PATCH, DELETE } from './route';
 
 const session = {
   id: 'session-1',
@@ -191,5 +192,51 @@ describe('TestSession item route unit tests (mocked service)', () => {
 
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: 'Internal server error' });
+  });
+
+  describe('DELETE', () => {
+    it('deletes an eligible test session when authenticated as ADMIN', async () => {
+      serviceMock.deleteTestSession.mockResolvedValue(undefined);
+
+      const response = await DELETE(
+        new Request('http://localhost/api/test-sessions/session-1', { method: 'DELETE' }),
+        context('session-1')
+      );
+
+      expect(response.status).toBe(204);
+      expect(serviceMock.deleteTestSession).toHaveBeenCalledWith('session-1', 'authenticated-user');
+    });
+
+    it('rejects deletion when user does not have ADMIN role', async () => {
+      const { requireApiUser } = await import('@/lib/auth/api-access');
+      vi.mocked(requireApiUser).mockResolvedValueOnce({
+        authorized: false,
+        response: Response.json({ error: 'Insufficient permissions' }, { status: 403 }),
+      });
+
+      const response = await DELETE(
+        new Request('http://localhost/api/test-sessions/session-1', { method: 'DELETE' }),
+        context('session-1')
+      );
+
+      expect(response.status).toBe(403);
+      expect(serviceMock.deleteTestSession).not.toHaveBeenCalled();
+    });
+
+    it('returns 409 conflict when deleting a protected session', async () => {
+      serviceMock.deleteTestSession.mockRejectedValue(
+        new DatabaseConflictError('Cannot delete session with status APPROVED')
+      );
+
+      const response = await DELETE(
+        new Request('http://localhost/api/test-sessions/session-1', { method: 'DELETE' }),
+        context('session-1')
+      );
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: 'Cannot delete session with status APPROVED',
+      });
+    });
   });
 });
