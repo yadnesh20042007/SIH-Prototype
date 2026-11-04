@@ -22,7 +22,18 @@ const originalAppUrl = process.env.NEXT_PUBLIC_APP_URL;
 
 const date = new Date('2026-09-07T10:00:00.000Z');
 const decimal = (value: string) => ({ toString: () => value });
-const observations = [
+
+interface TestObservationFixture {
+  id: string;
+  sessionId: string;
+  testType: string;
+  sequenceIndex: number;
+  observationData: Record<string, unknown>;
+  observationFingerprint: string | null;
+  createdAt: Date;
+}
+
+const observations: TestObservationFixture[] = [
   { id: 'o-w', sessionId: 'session-1', testType: 'WEIGHING_PERFORMANCE', sequenceIndex: 0, observationData: { sequenceIndex: 0, load: 10, indicatedValue: 10, additionalLoad: 0, zeroError: 0, loadingDirection: 'increasing' }, observationFingerprint: null, createdAt: date },
   { id: 'o-r', sessionId: 'session-1', testType: 'REPEATABILITY', sequenceIndex: 0, observationData: { testLoad: 10, indications: [10, 10, 10], autoZeroOrTrackingActive: false }, observationFingerprint: null, createdAt: date },
   { id: 'o-e', sessionId: 'session-1', testType: 'ECCENTRIC_LOADING', sequenceIndex: 0, observationData: { positionId: '1', appliedLoad: 10, indicatedValue: 10, additionalLoad: 0, zeroError: 0, autoZeroOrTrackingDisabled: true }, observationFingerprint: null, createdAt: date },
@@ -51,7 +62,7 @@ function currentResults() {
   });
 }
 
-function demoResults(demoObs: typeof observations) {
+function demoResults(demoObs: TestObservationFixture[]) {
   const config = instrumentConfigFingerprint(instrument as never, 'INITIAL_VERIFICATION');
   return ['WEIGHING_PERFORMANCE', 'REPEATABILITY', 'ECCENTRIC_LOADING'].map((testType, index) => {
     const rows = demoObs.filter(item => item.testType === testType);
