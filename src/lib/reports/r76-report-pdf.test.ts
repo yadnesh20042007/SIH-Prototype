@@ -198,7 +198,7 @@ describe('R76 report PDF generation', () => {
     expect(typeDoc.getPageCount()).toBeGreaterThan(initPageCount);
   });
 
-  it('marks PDF with prominent warnings and metadata when observations contain demo data', async () => {
+  it('does not apply demo watermark or demo warnings to reports even when observations contain demo data', async () => {
     const demoData: R76ReportData = JSON.parse(JSON.stringify(data));
     demoData.session.observations = [
       {
@@ -211,9 +211,9 @@ describe('R76 report PDF generation', () => {
     const pdf = await renderR76ReportPdf(demoData);
     const doc = await PDFDocument.load(pdf);
 
-    expect(doc.getTitle()).toContain('[DEMO DATA - NOT FOR LEGAL USE]');
-    expect(doc.getSubject()).toContain('SIMULATED DEMO DATA');
-    expect(doc.getKeywords()).toContain('DEMO-DATA');
+    expect(doc.getTitle()).not.toContain('DEMO DATA');
+    expect(doc.getSubject()).not.toContain('SIMULATED');
+    expect(doc.getKeywords() ?? '').not.toContain('DEMO-DATA');
   });
 
   it('does not apply demo watermark or demo warnings to genuine observations', async () => {

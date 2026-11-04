@@ -184,6 +184,124 @@ async function deletePersistedObservation(id: string): Promise<void> {
   }
 }
 
+async function batchPersistObservations(
+  sessionId: string,
+  observations: Array<{
+    id?: string;
+    clientRowId: string;
+    testType: StoredTestType;
+    sequenceIndex: number;
+    observationData: Record<string, unknown>;
+  }>,
+  deletedIds: string[]
+): Promise<{
+  savedObservations: Array<SavedTestObservationResponse & { clientRowId?: string }>;
+  deletedCount: number;
+}> {
+  const response = await fetch('/api/test-observations/batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sessionId,
+      observations,
+      deletedIds: deletedIds.length > 0 ? deletedIds : undefined,
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(observationError(payload, response.status));
+  return payload;
+}
+
+function cloneSnapshot<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function isWeighingRowsModified(rows: WeighingRowState[], snapshot?: WeighingRowState[]): boolean {
+  if (!snapshot) return false;
+  if (rows.length !== snapshot.length) return true;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const s = snapshot[i];
+    if (
+      r.load !== s.load ||
+      r.indicatedValue !== s.indicatedValue ||
+      r.additionalLoad !== s.additionalLoad ||
+      r.zeroError !== s.zeroError ||
+      r.loadingDirection !== s.loadingDirection
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isRepeatabilityModified(val: RepeatabilityFormState, snap?: RepeatabilityFormState): boolean {
+  if (!snap) return false;
+  if (val.testLoad !== snap.testLoad) return true;
+  if (val.autoZeroOrTrackingActive !== snap.autoZeroOrTrackingActive) return true;
+  if (val.indications.length !== snap.indications.length) return true;
+  for (let i = 0; i < val.indications.length; i++) {
+    if (val.indications[i] !== snap.indications[i]) return true;
+  }
+  const valSeries = val.series ?? [];
+  const snapSeries = snap.series ?? [];
+  if (valSeries.length !== snapSeries.length) return true;
+  for (let i = 0; i < valSeries.length; i++) {
+    const vs = valSeries[i];
+    const ss = snapSeries[i];
+    if (vs.seriesNumber !== ss.seriesNumber || vs.testLoad !== ss.testLoad) return true;
+    if (vs.indications.length !== ss.indications.length) return true;
+    for (let j = 0; j < vs.indications.length; j++) {
+      if (vs.indications[j] !== ss.indications[j]) return true;
+    }
+  }
+  return false;
+}
+
+function isEccentricRowsModified(rows: EccentricRowState[], snapshot?: EccentricRowState[]): boolean {
+  if (!snapshot) return false;
+  if (rows.length !== snapshot.length) return true;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const s = snapshot[i];
+    if (
+      r.positionId !== s.positionId ||
+      r.appliedLoad !== s.appliedLoad ||
+      r.indicatedValue !== s.indicatedValue ||
+      r.additionalLoad !== s.additionalLoad ||
+      r.zeroError !== s.zeroError ||
+      r.autoZeroOrTrackingDisabled !== s.autoZeroOrTrackingDisabled
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isDiscriminationRowsModified(rows: DiscriminationRowState[], snapshot?: DiscriminationRowState[]): boolean {
+  if (!snapshot) return false;
+  if (rows.length !== snapshot.length) return true;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const s = snapshot[i];
+    if (
+      r.testLoad !== s.testLoad ||
+      r.indicationBefore !== s.indicationBefore ||
+      r.indicationAfter !== s.indicationAfter
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isZeroSettingModified(val: ZeroSettingFormState, snap?: ZeroSettingFormState): boolean {
+  if (!snap) return false;
+  return val.load !== snap.load ||
+    val.indicatedValue !== snap.indicatedValue ||
+    val.additionalLoad !== snap.additionalLoad;
+}
+
 async function fetchFreshness(sessionId: string): Promise<{
   testType: StoredTestType; state: string; evaluatedObservationFingerprint: string | null;
 }[]> {
@@ -337,11 +455,11 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
     zeroSetting: false,
   });
   const originalDemoSnapshot = useRef<{
-    weighing?: string;
-    repeatability?: string;
-    eccentric?: string;
-    discrimination?: string;
-    zeroSetting?: string;
+    weighing?: WeighingRowState[];
+    repeatability?: RepeatabilityFormState;
+    eccentric?: EccentricRowState[];
+    discrimination?: DiscriminationRowState[];
+    zeroSetting?: ZeroSettingFormState;
   }>({});
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -369,54 +487,73 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           throw new Error('A valid test session is required to open the evaluation workspace.');
         }
 
-        const [instrumentResponse, sessionResponse, observationsResponse, resultsResponse, approvalsResponse] = await Promise.all([
-          fetch(`/api/instruments/${encodeURIComponent(instrumentId)}`, {
-            signal: controller.signal,
-          }),
-          fetch(`/api/test-sessions/${encodeURIComponent(sessionId)}`, {
-            signal: controller.signal,
-          }),
-          fetch(`/api/test-observations?testSessionId=${encodeURIComponent(sessionId)}`, {
-            signal: controller.signal,
-          }),
-          fetch(`/api/test-results?testSessionId=${encodeURIComponent(sessionId)}`, {
-            signal: controller.signal,
-          }),
-          fetch(`/api/approvals?testSessionId=${encodeURIComponent(sessionId)}`, {
-            signal: controller.signal,
-          }),
-        ]);
-        const data = (await instrumentResponse.json()) as SavedInstrumentResponse & {
-          error?: string;
-        };
-        const sessionData = (await sessionResponse.json()) as SavedTestSessionResponse & {
-          error?: string;
-        };
-        const observationsData = await observationsResponse.json();
-        const resultsData = await resultsResponse.json();
-        const approvalsData = await approvalsResponse.json();
-        if (!instrumentResponse.ok) {
-          throw new Error(
-            typeof data.error === 'string'
-              ? data.error
-              : 'Unable to load the registered instrument.'
-          );
-        }
-        if (!sessionResponse.ok) {
-          throw new Error(
-            typeof sessionData.error === 'string'
-              ? sessionData.error
-              : 'Unable to load the test session.'
-          );
-        }
-        if (!observationsResponse.ok) {
-          throw new Error(observationError(observationsData, observationsResponse.status));
-        }
-        if (!resultsResponse.ok) {
-          throw new Error(observationError(resultsData, resultsResponse.status));
-        }
-        if (!approvalsResponse.ok) {
-          throw new Error(observationError(approvalsData, approvalsResponse.status));
+        let data: SavedInstrumentResponse & { error?: string };
+        let sessionData: SavedTestSessionResponse & { error?: string };
+        let observationsData: SavedTestObservationResponse[];
+        let resultsData: SavedTestResultResponse[];
+        let approvalsData: Array<{ id: string; action: string; comments: string | null; createdAt: string; user: { name: string; role: string } }>;
+
+        const workspaceResponse = await fetch(`/api/test-sessions/${encodeURIComponent(sessionId)}/workspace`, {
+          signal: controller.signal,
+        }).catch(() => null);
+
+        if (workspaceResponse && workspaceResponse.ok) {
+          const workspace = await workspaceResponse.json();
+          data = workspace.instrument;
+          sessionData = workspace.session;
+          observationsData = workspace.observations;
+          resultsData = workspace.results;
+          approvalsData = workspace.approvals;
+        } else {
+          const [instrumentResponse, sessionResponse, observationsResponse, resultsResponse, approvalsResponse] = await Promise.all([
+            fetch(`/api/instruments/${encodeURIComponent(instrumentId)}`, {
+              signal: controller.signal,
+            }),
+            fetch(`/api/test-sessions/${encodeURIComponent(sessionId)}`, {
+              signal: controller.signal,
+            }),
+            fetch(`/api/test-observations?testSessionId=${encodeURIComponent(sessionId)}`, {
+              signal: controller.signal,
+            }),
+            fetch(`/api/test-results?testSessionId=${encodeURIComponent(sessionId)}`, {
+              signal: controller.signal,
+            }),
+            fetch(`/api/approvals?testSessionId=${encodeURIComponent(sessionId)}`, {
+              signal: controller.signal,
+            }),
+          ]);
+          data = (await instrumentResponse.json()) as SavedInstrumentResponse & {
+            error?: string;
+          };
+          sessionData = (await sessionResponse.json()) as SavedTestSessionResponse & {
+            error?: string;
+          };
+          observationsData = await observationsResponse.json();
+          resultsData = await resultsResponse.json();
+          approvalsData = await approvalsResponse.json();
+          if (!instrumentResponse.ok) {
+            throw new Error(
+              typeof data.error === 'string'
+                ? data.error
+                : 'Unable to load the registered instrument.'
+            );
+          }
+          if (!sessionResponse.ok) {
+            throw new Error(
+              typeof sessionData.error === 'string'
+                ? sessionData.error
+                : 'Unable to load the test session.'
+            );
+          }
+          if (!observationsResponse.ok) {
+            throw new Error(observationError(observationsData, observationsResponse.status));
+          }
+          if (!resultsResponse.ok) {
+            throw new Error(observationError(resultsData, resultsResponse.status));
+          }
+          if (!approvalsResponse.ok) {
+            throw new Error(observationError(approvalsData, approvalsResponse.status));
+          }
         }
         if (sessionData.instrumentId !== instrumentId) {
           throw new Error('This test session does not belong to the selected instrument.');
@@ -588,11 +725,11 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           zeroSetting: zeroSettingDemoInfo.isModified,
         });
 
-        if (weighingDemoInfo.isDemo) originalDemoSnapshot.current.weighing = JSON.stringify(loadedWeighing);
-        if (repeatabilityDemoInfo.isDemo) originalDemoSnapshot.current.repeatability = JSON.stringify(loadedRepeatability);
-        if (eccentricDemoInfo.isDemo) originalDemoSnapshot.current.eccentric = JSON.stringify(loadedEccentric);
-        if (discriminationDemoInfo.isDemo) originalDemoSnapshot.current.discrimination = JSON.stringify(loadedDiscrimination);
-        if (zeroSettingDemoInfo.isDemo) originalDemoSnapshot.current.zeroSetting = JSON.stringify(loadedZeroSetting);
+        if (weighingDemoInfo.isDemo) originalDemoSnapshot.current.weighing = cloneSnapshot(loadedWeighing);
+        if (repeatabilityDemoInfo.isDemo) originalDemoSnapshot.current.repeatability = cloneSnapshot(loadedRepeatability);
+        if (eccentricDemoInfo.isDemo) originalDemoSnapshot.current.eccentric = cloneSnapshot(loadedEccentric);
+        if (discriminationDemoInfo.isDemo) originalDemoSnapshot.current.discrimination = cloneSnapshot(loadedDiscrimination);
+        if (zeroSettingDemoInfo.isDemo) originalDemoSnapshot.current.zeroSetting = cloneSnapshot(loadedZeroSetting);
         const storedResults = resultsData as SavedTestResultResponse[];
         const resultCounts = new Map<StoredTestType, number>();
         for (const storedResult of storedResults) {
@@ -653,10 +790,12 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
     let savedCount = 0;
 
     try {
+      const deletedIds: string[] = [];
+
       // Delete any removed weighing observations from backend
       for (const [rowId, dbId] of Object.entries(nextIds.weighing)) {
         if (!weighingRows.some((row) => row.id === rowId)) {
-          await deletePersistedObservation(dbId);
+          deletedIds.push(dbId);
           delete nextIds.weighing[rowId];
         }
       }
@@ -664,7 +803,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
       // Delete any removed eccentric observations from backend
       for (const [rowId, dbId] of Object.entries(nextIds.eccentric)) {
         if (!eccentricRows.some((row) => row.id === rowId)) {
-          await deletePersistedObservation(dbId);
+          deletedIds.push(dbId);
           delete nextIds.eccentric[rowId];
         }
       }
@@ -672,10 +811,19 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
       // Delete any removed discrimination observations from backend
       for (const [rowId, dbId] of Object.entries(nextIds.discrimination)) {
         if (!discriminationRows.some((row) => row.id === rowId)) {
-          await deletePersistedObservation(dbId);
+          deletedIds.push(dbId);
           delete nextIds.discrimination[rowId];
         }
       }
+
+      const batchItems: Array<{
+        id?: string;
+        clientRowId: string;
+        testType: StoredTestType;
+        sequenceIndex: number;
+        observationData: Record<string, unknown>;
+      }> = [];
+
       for (const [index, row] of weighingRows.entries()) {
         if (row.load.trim() === '' && row.indicatedValue.trim() === '') {
           if (nextIds.weighing[row.id]) throw new Error('A saved weighing row cannot be cleared; restore its values before saving.');
@@ -697,19 +845,13 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           loadingDirection: row.loadingDirection,
           ...(demoStatus.weighing ? { isDemo: true, dataSource: 'DEMO_DATA', ...(modifiedDemo.weighing ? { isModified: true } : {}) } : {}),
         };
-        const existingId = nextIds.weighing[row.id];
-        const saved = await persistObservation(existingId, existingId
-          ? { sequenceIndex: index, observationData }
-          : { sessionId, testType: 'WEIGHING_PERFORMANCE', sequenceIndex: index, observationData });
-        nextIds.weighing[row.id] = saved.id;
-        setObservationIds({
-          weighing: { ...nextIds.weighing },
-          repeatability: nextIds.repeatability,
-          eccentric: { ...nextIds.eccentric },
-          discrimination: { ...nextIds.discrimination },
-          zeroSetting: nextIds.zeroSetting,
+        batchItems.push({
+          id: nextIds.weighing[row.id],
+          clientRowId: row.id,
+          testType: 'WEIGHING_PERFORMANCE',
+          sequenceIndex: index,
+          observationData,
         });
-        savedCount += 1;
       }
 
       const hasRepeatability = repeatability.testLoad.trim() !== '' ||
@@ -738,19 +880,13 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
             : {}),
           ...(demoStatus.repeatability ? { isDemo: true, dataSource: 'DEMO_DATA', ...(modifiedDemo.repeatability ? { isModified: true } : {}) } : {}),
         };
-        const existingId = nextIds.repeatability ?? undefined;
-        const saved = await persistObservation(existingId, existingId
-          ? { observationData }
-          : { sessionId, testType: 'REPEATABILITY', sequenceIndex: 0, observationData });
-        nextIds.repeatability = saved.id;
-        setObservationIds({
-          weighing: { ...nextIds.weighing },
-          repeatability: nextIds.repeatability,
-          eccentric: { ...nextIds.eccentric },
-          discrimination: { ...nextIds.discrimination },
-          zeroSetting: nextIds.zeroSetting,
+        batchItems.push({
+          id: nextIds.repeatability ?? undefined,
+          clientRowId: 'repeatability',
+          testType: 'REPEATABILITY',
+          sequenceIndex: 0,
+          observationData,
         });
-        savedCount += 1;
       } else if (nextIds.repeatability) {
         throw new Error('Saved repeatability observations cannot be cleared; restore their values before saving.');
       }
@@ -770,19 +906,13 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           zeroDeterminedBeforeEachLoading: eccentricZeroDetermined,
           ...(demoStatus.eccentric ? { isDemo: true, dataSource: 'DEMO_DATA', ...(modifiedDemo.eccentric ? { isModified: true } : {}) } : {}),
         };
-        const existingId = nextIds.eccentric[row.id];
-        const saved = await persistObservation(existingId, existingId
-          ? { sequenceIndex: index, observationData }
-          : { sessionId, testType: 'ECCENTRIC_LOADING', sequenceIndex: index, observationData });
-        nextIds.eccentric[row.id] = saved.id;
-        setObservationIds({
-          weighing: { ...nextIds.weighing },
-          repeatability: nextIds.repeatability,
-          eccentric: { ...nextIds.eccentric },
-          discrimination: { ...nextIds.discrimination },
-          zeroSetting: nextIds.zeroSetting,
+        batchItems.push({
+          id: nextIds.eccentric[row.id],
+          clientRowId: row.id,
+          testType: 'ECCENTRIC_LOADING',
+          sequenceIndex: index,
+          observationData,
         });
-        savedCount += 1;
       }
 
       for (const [index, row] of discriminationRows.entries()) {
@@ -796,19 +926,13 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           indicationAfter: parseNum(row.indicationAfter, `Discrimination indication after (row ${index + 1})`),
           ...(demoStatus.discrimination ? { isDemo: true, dataSource: 'DEMO_DATA', ...(modifiedDemo.discrimination ? { isModified: true } : {}) } : {}),
         };
-        const existingId = nextIds.discrimination[row.id];
-        const saved = await persistObservation(existingId, existingId
-          ? { sequenceIndex: index, observationData }
-          : { sessionId, testType: 'DISCRIMINATION', sequenceIndex: index, observationData });
-        nextIds.discrimination[row.id] = saved.id;
-        setObservationIds({
-          weighing: { ...nextIds.weighing },
-          repeatability: nextIds.repeatability,
-          eccentric: { ...nextIds.eccentric },
-          discrimination: { ...nextIds.discrimination },
-          zeroSetting: nextIds.zeroSetting,
+        batchItems.push({
+          id: nextIds.discrimination[row.id],
+          clientRowId: row.id,
+          testType: 'DISCRIMINATION',
+          sequenceIndex: index,
+          observationData,
         });
-        savedCount += 1;
       }
 
       const hasZeroSetting = zeroSetting.load.trim() !== '' && zeroSetting.indicatedValue.trim() !== '';
@@ -819,24 +943,34 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           additionalLoad: parseNum(zeroSetting.additionalLoad.trim() || '0', 'Zero-setting additional load'),
           ...(demoStatus.zeroSetting ? { isDemo: true, dataSource: 'DEMO_DATA', ...(modifiedDemo.zeroSetting ? { isModified: true } : {}) } : {}),
         };
-        const existingId = nextIds.zeroSetting ?? undefined;
-        const saved = await persistObservation(existingId, existingId
-          ? { observationData }
-          : { sessionId, testType: 'ZERO_SETTING_ACCURACY', sequenceIndex: 0, observationData });
-        nextIds.zeroSetting = saved.id;
-        setObservationIds({
-          weighing: { ...nextIds.weighing },
-          repeatability: nextIds.repeatability,
-          eccentric: { ...nextIds.eccentric },
-          discrimination: { ...nextIds.discrimination },
-          zeroSetting: nextIds.zeroSetting,
+        batchItems.push({
+          id: nextIds.zeroSetting ?? undefined,
+          clientRowId: 'zeroSetting',
+          testType: 'ZERO_SETTING_ACCURACY',
+          sequenceIndex: 0,
+          observationData,
         });
-        savedCount += 1;
       } else if (zeroSetting.load.trim() !== '' || zeroSetting.indicatedValue.trim() !== '') {
         throw new Error('Both load and indicated value are required for zero-setting observation.');
       } else if (nextIds.zeroSetting) {
         throw new Error('Saved zero-setting observations cannot be cleared; restore their values before saving.');
       }
+
+      if (batchItems.length > 0 || deletedIds.length > 0) {
+        const batchResult = await batchPersistObservations(sessionId, batchItems, deletedIds);
+        for (const saved of batchResult.savedObservations) {
+          if (saved.clientRowId) {
+            if (saved.testType === 'WEIGHING_PERFORMANCE') nextIds.weighing[saved.clientRowId] = saved.id;
+            else if (saved.testType === 'REPEATABILITY') nextIds.repeatability = saved.id;
+            else if (saved.testType === 'ECCENTRIC_LOADING') nextIds.eccentric[saved.clientRowId] = saved.id;
+            else if (saved.testType === 'DISCRIMINATION') nextIds.discrimination[saved.clientRowId] = saved.id;
+            else if (saved.testType === 'ZERO_SETTING_ACCURACY') nextIds.zeroSetting = saved.id;
+          }
+        }
+        savedCount = batchResult.savedObservations.length;
+      }
+
+      setObservationIds(nextIds);
 
       if (session?.status === 'DRAFT') {
         const response = await fetch(`/api/test-sessions/${encodeURIComponent(sessionId)}`, {
@@ -1237,10 +1371,17 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
         return;
       }
 
-      const engineResult = data as OrchestrationResult & { savedResults: SavedTestResultResponse[] };
+      const engineResult = data as OrchestrationResult & {
+        savedResults: SavedTestResultResponse[];
+        freshness?: Array<{
+          testType: StoredTestType;
+          state: string;
+          evaluatedObservationFingerprint: string | null;
+        }>;
+      };
       setResult(engineResult);
       setSavedResults(engineResult.savedResults);
-      const freshness = await fetchFreshness(sessionId);
+      const freshness = engineResult.freshness ?? await fetchFreshness(sessionId);
       setResultsStale(engineResult.savedResults.some(record =>
         !freshness.some(item => item.testType === record.testType && item.state === 'CURRENT' &&
           item.evaluatedObservationFingerprint === record.evaluatedObservationFingerprint)
@@ -1285,9 +1426,13 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
   }
 
   function markDisplayedResultsStale(): void {
-    if (result || savedResults.length > 0) {
+    if (!resultsStale && (result !== null || savedResults.length > 0)) {
       setResultsStale(true);
+    }
+    if (result !== null) {
       setResult(null);
+    }
+    if (resultPersistenceMessage !== null) {
       setResultPersistenceMessage(null);
     }
   }
@@ -1319,7 +1464,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
       const res = generateWeighingPerformanceDemo(newInstrument, newContext);
       if (res.success && res.data) {
         setWeighingRows(res.data);
-        originalDemoSnapshot.current.weighing = JSON.stringify(res.data);
+        originalDemoSnapshot.current.weighing = cloneSnapshot(res.data);
         nextModified.weighing = false;
         updatedAny = true;
       } else {
@@ -1333,7 +1478,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
       const res = generateRepeatabilityDemo(newInstrument, newContext);
       if (res.success && res.data) {
         setRepeatability(res.data);
-        originalDemoSnapshot.current.repeatability = JSON.stringify(res.data);
+        originalDemoSnapshot.current.repeatability = cloneSnapshot(res.data);
         nextModified.repeatability = false;
         updatedAny = true;
       } else {
@@ -1347,7 +1492,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
       const res = generateEccentricLoadingDemo(newInstrument);
       if (res.success && res.data) {
         setEccentricRows(res.data);
-        originalDemoSnapshot.current.eccentric = JSON.stringify(res.data);
+        originalDemoSnapshot.current.eccentric = cloneSnapshot(res.data);
         nextModified.eccentric = false;
         updatedAny = true;
       } else {
@@ -1361,7 +1506,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
       const res = generateDiscriminationDemo(newInstrument, newContext);
       if (res.success && res.data) {
         setDiscriminationRows(res.data);
-        originalDemoSnapshot.current.discrimination = JSON.stringify(res.data);
+        originalDemoSnapshot.current.discrimination = cloneSnapshot(res.data);
         nextModified.discrimination = false;
         updatedAny = true;
       } else {
@@ -1375,7 +1520,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
       const res = generateZeroSettingDemo(newInstrument);
       if (res.success && res.data) {
         setZeroSetting(res.data);
-        originalDemoSnapshot.current.zeroSetting = JSON.stringify(res.data);
+        originalDemoSnapshot.current.zeroSetting = cloneSnapshot(res.data);
         nextModified.zeroSetting = false;
         updatedAny = true;
       } else {
@@ -1433,7 +1578,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
       return;
     }
     setWeighingRows(res.data);
-    originalDemoSnapshot.current.weighing = JSON.stringify(res.data);
+    originalDemoSnapshot.current.weighing = cloneSnapshot(res.data);
     setDemoStatus((prev) => ({ ...prev, weighing: true }));
     setModifiedDemo((prev) => ({ ...prev, weighing: false }));
     markDisplayedResultsStale();
@@ -1470,7 +1615,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
       return;
     }
     setRepeatability(res.data);
-    originalDemoSnapshot.current.repeatability = JSON.stringify(res.data);
+    originalDemoSnapshot.current.repeatability = cloneSnapshot(res.data);
     setDemoStatus((prev) => ({ ...prev, repeatability: true }));
     setModifiedDemo((prev) => ({ ...prev, repeatability: false }));
     markDisplayedResultsStale();
@@ -1507,7 +1652,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
       return;
     }
     setEccentricRows(res.data);
-    originalDemoSnapshot.current.eccentric = JSON.stringify(res.data);
+    originalDemoSnapshot.current.eccentric = cloneSnapshot(res.data);
     setDemoStatus((prev) => ({ ...prev, eccentric: true }));
     setModifiedDemo((prev) => ({ ...prev, eccentric: false }));
     markDisplayedResultsStale();
@@ -1544,7 +1689,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
       return;
     }
     setDiscriminationRows(res.data);
-    originalDemoSnapshot.current.discrimination = JSON.stringify(res.data);
+    originalDemoSnapshot.current.discrimination = cloneSnapshot(res.data);
     setDemoStatus((prev) => ({ ...prev, discrimination: true }));
     setModifiedDemo((prev) => ({ ...prev, discrimination: false }));
     markDisplayedResultsStale();
@@ -1581,7 +1726,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
       return;
     }
     setZeroSetting(res.data);
-    originalDemoSnapshot.current.zeroSetting = JSON.stringify(res.data);
+    originalDemoSnapshot.current.zeroSetting = cloneSnapshot(res.data);
     setDemoStatus((prev) => ({ ...prev, zeroSetting: true }));
     setModifiedDemo((prev) => ({ ...prev, zeroSetting: false }));
     markDisplayedResultsStale();
@@ -1621,7 +1766,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
       const res = generateWeighingPerformanceDemo(instrument, verificationContext);
       if (res.success && res.data) {
         setWeighingRows(res.data);
-        originalDemoSnapshot.current.weighing = JSON.stringify(res.data);
+        originalDemoSnapshot.current.weighing = cloneSnapshot(res.data);
         nextStatus.weighing = true;
         nextModified.weighing = false;
         loadedCount++;
@@ -1634,7 +1779,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
       const res = generateRepeatabilityDemo(instrument, verificationContext);
       if (res.success && res.data) {
         setRepeatability(res.data);
-        originalDemoSnapshot.current.repeatability = JSON.stringify(res.data);
+        originalDemoSnapshot.current.repeatability = cloneSnapshot(res.data);
         nextStatus.repeatability = true;
         nextModified.repeatability = false;
         loadedCount++;
@@ -1647,7 +1792,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
       const res = generateEccentricLoadingDemo(instrument);
       if (res.success && res.data) {
         setEccentricRows(res.data);
-        originalDemoSnapshot.current.eccentric = JSON.stringify(res.data);
+        originalDemoSnapshot.current.eccentric = cloneSnapshot(res.data);
         nextStatus.eccentric = true;
         nextModified.eccentric = false;
         loadedCount++;
@@ -1660,7 +1805,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
       const res = generateDiscriminationDemo(instrument, verificationContext);
       if (res.success && res.data) {
         setDiscriminationRows(res.data);
-        originalDemoSnapshot.current.discrimination = JSON.stringify(res.data);
+        originalDemoSnapshot.current.discrimination = cloneSnapshot(res.data);
         nextStatus.discrimination = true;
         nextModified.discrimination = false;
         loadedCount++;
@@ -1673,7 +1818,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
       const res = generateZeroSettingDemo(instrument);
       if (res.success && res.data) {
         setZeroSetting(res.data);
-        originalDemoSnapshot.current.zeroSetting = JSON.stringify(res.data);
+        originalDemoSnapshot.current.zeroSetting = cloneSnapshot(res.data);
         nextStatus.zeroSetting = true;
         nextModified.zeroSetting = false;
         loadedCount++;
@@ -1940,11 +2085,11 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
               setWeighingRows(rows);
               markDisplayedResultsStale();
               if (!hasWeighingReadings(rows)) {
-                setDemoStatus((prev) => ({ ...prev, weighing: false }));
-                setModifiedDemo((prev) => ({ ...prev, weighing: false }));
+                setDemoStatus((prev) => (prev.weighing ? { ...prev, weighing: false } : prev));
+                setModifiedDemo((prev) => (prev.weighing ? { ...prev, weighing: false } : prev));
               } else if (demoStatus.weighing && originalDemoSnapshot.current.weighing) {
-                const isDiff = JSON.stringify(rows) !== originalDemoSnapshot.current.weighing;
-                setModifiedDemo((prev) => ({ ...prev, weighing: isDiff }));
+                const isDiff = isWeighingRowsModified(rows, originalDemoSnapshot.current.weighing);
+                setModifiedDemo((prev) => (prev.weighing === isDiff ? prev : { ...prev, weighing: isDiff }));
               }
             }}
             nextId={() => generateRowId('w')}
@@ -1973,11 +2118,11 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
               setRepeatability(value);
               markDisplayedResultsStale();
               if (!hasRepeatabilityReadings(value)) {
-                setDemoStatus((prev) => ({ ...prev, repeatability: false }));
-                setModifiedDemo((prev) => ({ ...prev, repeatability: false }));
+                setDemoStatus((prev) => (prev.repeatability ? { ...prev, repeatability: false } : prev));
+                setModifiedDemo((prev) => (prev.repeatability ? { ...prev, repeatability: false } : prev));
               } else if (demoStatus.repeatability && originalDemoSnapshot.current.repeatability) {
-                const isDiff = JSON.stringify(value) !== originalDemoSnapshot.current.repeatability;
-                setModifiedDemo((prev) => ({ ...prev, repeatability: isDiff }));
+                const isDiff = isRepeatabilityModified(value, originalDemoSnapshot.current.repeatability);
+                setModifiedDemo((prev) => (prev.repeatability === isDiff ? prev : { ...prev, repeatability: isDiff }));
               }
             }}
             accuracyClass={
@@ -2010,11 +2155,11 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
               setEccentricRows(rows);
               markDisplayedResultsStale();
               if (!hasEccentricReadings(rows)) {
-                setDemoStatus((prev) => ({ ...prev, eccentric: false }));
-                setModifiedDemo((prev) => ({ ...prev, eccentric: false }));
+                setDemoStatus((prev) => (prev.eccentric ? { ...prev, eccentric: false } : prev));
+                setModifiedDemo((prev) => (prev.eccentric ? { ...prev, eccentric: false } : prev));
               } else if (demoStatus.eccentric && originalDemoSnapshot.current.eccentric) {
-                const isDiff = JSON.stringify(rows) !== originalDemoSnapshot.current.eccentric;
-                setModifiedDemo((prev) => ({ ...prev, eccentric: isDiff }));
+                const isDiff = isEccentricRowsModified(rows, originalDemoSnapshot.current.eccentric);
+                setModifiedDemo((prev) => (prev.eccentric === isDiff ? prev : { ...prev, eccentric: isDiff }));
               }
             }}
             zeroDeterminedBeforeEachLoading={
@@ -2057,11 +2202,11 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
               setDiscriminationRows(rows);
               markDisplayedResultsStale();
               if (!hasDiscriminationReadings(rows)) {
-                setDemoStatus((prev) => ({ ...prev, discrimination: false }));
-                setModifiedDemo((prev) => ({ ...prev, discrimination: false }));
+                setDemoStatus((prev) => (prev.discrimination ? { ...prev, discrimination: false } : prev));
+                setModifiedDemo((prev) => (prev.discrimination ? { ...prev, discrimination: false } : prev));
               } else if (demoStatus.discrimination && originalDemoSnapshot.current.discrimination) {
-                const isDiff = JSON.stringify(rows) !== originalDemoSnapshot.current.discrimination;
-                setModifiedDemo((prev) => ({ ...prev, discrimination: isDiff }));
+                const isDiff = isDiscriminationRowsModified(rows, originalDemoSnapshot.current.discrimination);
+                setModifiedDemo((prev) => (prev.discrimination === isDiff ? prev : { ...prev, discrimination: isDiff }));
               }
             }}
             nextId={() => generateRowId('d')}
@@ -2086,11 +2231,11 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
               setZeroSetting(val);
               markDisplayedResultsStale();
               if (!hasZeroSettingReadings(val)) {
-                setDemoStatus((prev) => ({ ...prev, zeroSetting: false }));
-                setModifiedDemo((prev) => ({ ...prev, zeroSetting: false }));
+                setDemoStatus((prev) => (prev.zeroSetting ? { ...prev, zeroSetting: false } : prev));
+                setModifiedDemo((prev) => (prev.zeroSetting ? { ...prev, zeroSetting: false } : prev));
               } else if (demoStatus.zeroSetting && originalDemoSnapshot.current.zeroSetting) {
-                const isDiff = JSON.stringify(val) !== originalDemoSnapshot.current.zeroSetting;
-                setModifiedDemo((prev) => ({ ...prev, zeroSetting: isDiff }));
+                const isDiff = isZeroSettingModified(val, originalDemoSnapshot.current.zeroSetting);
+                setModifiedDemo((prev) => (prev.zeroSetting === isDiff ? prev : { ...prev, zeroSetting: isDiff }));
               }
             }}
             onLoadDemoData={testingReadOnly ? undefined : requestLoadZeroSettingDemo}

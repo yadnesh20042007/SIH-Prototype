@@ -197,3 +197,114 @@ export async function deleteTestSession(id: string, actorId: string): Promise<vo
     throwMappedDatabaseError(error, 'TestSession');
   }
 }
+
+export interface EvaluationWorkspaceData {
+  session: TestSessionRecord;
+  instrument: any;
+  observations: any[];
+  results: any[];
+  approvals: any[];
+}
+
+export async function getEvaluationWorkspace(sessionId: string): Promise<EvaluationWorkspaceData> {
+  try {
+    const session = await prisma.testSession.findUnique({
+      where: { id: sessionId },
+      include: {
+        instrument: {
+          include: { manufacturer: true },
+        },
+        observations: {
+          orderBy: [{ sequenceIndex: 'asc' }, { createdAt: 'asc' }],
+        },
+        results: {
+          orderBy: { createdAt: 'desc' },
+        },
+        approvals: {
+          include: {
+            user: { select: { id: true, name: true, role: true } },
+          },
+          orderBy: { createdAt: 'desc' },
+        },
+      },
+    });
+
+    if (!session) throw new DatabaseNotFoundError('TestSession not found');
+
+    const instrument = {
+      id: session.instrument.id,
+      manufacturerId: session.instrument.manufacturerId,
+      manufacturer: {
+        id: session.instrument.manufacturer.id,
+        name: session.instrument.manufacturer.name,
+        country: session.instrument.manufacturer.country,
+        registrationCode: session.instrument.manufacturer.registrationCode,
+      },
+      model: session.instrument.model,
+      serialNumber: session.instrument.serialNumber,
+      accuracyClass: session.instrument.accuracyClass,
+      instrumentType: session.instrument.instrumentType,
+      indicationType: session.instrument.indicationType ?? null,
+      max: session.instrument.max.toString(),
+      min: session.instrument.min.toString(),
+      e: session.instrument.e.toString(),
+      d: session.instrument.d.toString(),
+      numberOfSupportPoints: session.instrument.numberOfSupportPoints,
+      additiveTareEffect: session.instrument.additiveTareEffect,
+      hasAutoZeroOrTracking: session.instrument.hasAutoZeroOrTracking,
+      hasInitialZeroSettingDevice: session.instrument.hasInitialZeroSettingDevice,
+      initialZeroSettingRange: session.instrument.initialZeroSettingRange.toString(),
+      hasFineDisplayDevice: session.instrument.hasFineDisplayDevice,
+      zeroSettingMechanisms: session.instrument.zeroSettingMechanisms,
+      registeredById: session.instrument.registeredById,
+      createdAt: session.instrument.createdAt.toISOString(),
+      updatedAt: session.instrument.updatedAt.toISOString(),
+    };
+
+    const observations = session.observations.map((obs) => ({
+      id: obs.id,
+      sessionId: obs.sessionId,
+      testType: obs.testType,
+      sequenceIndex: obs.sequenceIndex,
+      observationData: obs.observationData,
+      createdAt: obs.createdAt.toISOString(),
+    }));
+
+    const results = session.results.map((r) => ({
+      id: r.id,
+      sessionId: r.sessionId,
+      testType: r.testType,
+      outcome: r.outcome,
+      maxAbsoluteError: r.maxAbsoluteError.toString(),
+      mpe: r.mpe.toString(),
+      repeatabilityRange: r.repeatabilityRange?.toString() ?? null,
+      r76Reference: r.r76Reference,
+      explanation: r.explanation,
+      rulesetVersionId: r.rulesetVersionId,
+      complianceTrace: r.complianceTrace,
+      createdAt: r.createdAt.toISOString(),
+      evaluatedObservationFingerprint: r.evaluatedObservationFingerprint ?? null,
+      evaluatedConfigFingerprint: r.evaluatedConfigFingerprint ?? null,
+    }));
+
+    const approvals = session.approvals.map((a) => ({
+      id: a.id,
+      sessionId: a.sessionId,
+      userId: a.userId,
+      action: a.action,
+      comments: a.comments,
+      createdAt: a.createdAt.toISOString(),
+      ...(a.user ? { user: a.user } : {}),
+    }));
+
+    return {
+      session: toTestSessionRecord(session),
+      instrument,
+      observations,
+      results,
+      approvals,
+    };
+  } catch (error) {
+    throwMappedDatabaseError(error, 'TestSession');
+  }
+}

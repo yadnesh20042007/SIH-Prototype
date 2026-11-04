@@ -5,7 +5,7 @@ import { evaluateInstrumentCompliance, type TestObservations } from '@/lib/r76/e
 import { AccuracyClass, InstrumentType, VerificationContext, normalizeVerificationContext, type Instrument } from '@/lib/r76/types';
 import { toTestResultPersistenceData } from '@/components/Evaluation/result-persistence';
 import { toTestResultRecord } from './test-result.service';
-import { logicalObservationFingerprint, observationConflict, PROTOTYPE_TEST_TYPES } from './result-freshness.service';
+import { logicalObservationFingerprint, observationConflict, PROTOTYPE_TEST_TYPES, assessResultFreshness } from './result-freshness.service';
 import { validateTestObservationCreate } from '@/lib/validation/test-observation';
 import { canonicalJson, instrumentConfigFingerprint } from '@/lib/db/observation-fingerprint';
 
@@ -103,6 +103,7 @@ export async function evaluateSavedSession(sessionId: string, expected: Expected
         }
       }
       const evaluation = evaluateInstrumentCompliance(instrument, context, observations);
+      const persistOps: Promise<unknown>[] = [];
       for (const test of evaluation.evaluatedTests) {
         const payload = toTestResultPersistenceData(test);
         if (!payload) continue;
@@ -119,11 +120,31 @@ export async function evaluateSavedSession(sessionId: string, expected: Expected
           ),
         };
         const existing = previous.find(row => row.testType === payload.testType);
-        if (existing) await tx.testResult.update({ where: { id: existing.id }, data });
-        else await tx.testResult.create({ data });
+        if (existing) {
+          persistOps.push(tx.testResult.update({ where: { id: existing.id }, data }));
+        } else {
+          persistOps.push(tx.testResult.create({ data }));
+        }
+      }
+      if (persistOps.length > 0) {
+        await Promise.all(persistOps);
       }
       const savedResults = await tx.testResult.findMany({ where: { sessionId } });
-      return { ...evaluation, savedResults: savedResults.map(toTestResultRecord) };
+      const currentConfigFp = instrumentConfigFingerprint(
+        saved,
+        session.verificationContext
+      );
+      const freshness = assessResultFreshness(
+        rows,
+        savedResults,
+        session.rulesetVersionId,
+        currentConfigFp
+      );
+      return {
+        ...evaluation,
+        savedResults: savedResults.map(toTestResultRecord),
+        freshness,
+      };
     }, { isolationLevel: 'Serializable', timeout: 20000 });
   } catch (error) { throwMappedDatabaseError(error, 'TestResult'); }
 }

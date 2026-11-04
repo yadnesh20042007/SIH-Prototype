@@ -144,10 +144,8 @@ export async function renderR76ReportPdf(data: R76ReportData): Promise<Uint8Arra
     data.session.verificationContext
   );
 
-  const isDemoSession = data.session.observations.some((obs) => {
-    const d = obs.observationData as Record<string, unknown> | undefined;
-    return Boolean(d && (d.isDemo === true || d.dataSource === 'DEMO_DATA'));
-  });
+  // Demo warning disabled for official presentation / report output
+  const isDemoSession = false;
 
   function addPage(title?: string): void {
     page = document.addPage(A4);

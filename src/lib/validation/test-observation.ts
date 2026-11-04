@@ -28,6 +28,20 @@ export interface TestObservationCreatePayload {
 
 export type TestObservationUpdatePayload = Partial<TestObservationCreatePayload>;
 
+export interface BatchObservationItem {
+  id?: string;
+  clientRowId?: string;
+  testType: TestObservationType;
+  sequenceIndex: number;
+  observationData: JsonObject;
+}
+
+export interface BatchTestObservationsPayload {
+  sessionId: string;
+  observations: BatchObservationItem[];
+  deletedIds?: string[];
+}
+
 export interface TestObservationValidation<T> {
   success: boolean;
   data?: T;
@@ -242,4 +256,98 @@ export function validateTestObservationUpdate(
     if (normalizedData !== undefined) data.observationData = normalizedData;
   }
   return outcome(result, data);
+}
+
+export function validateBatchTestObservations(
+  value: unknown
+): TestObservationValidation<BatchTestObservationsPayload> {
+  const result = new ValidationResult();
+  const body = assertObject(value, result);
+  if (!body) return { success: false, errors: result.errors };
+
+  const sessionId = requiredId(body, 'sessionId', result) ?? '';
+
+  let deletedIds: string[] | undefined;
+  if (has(body, 'deletedIds')) {
+    const rawDeleted = body.deletedIds;
+    if (!Array.isArray(rawDeleted)) {
+      result.add('deletedIds', 'must be an array of IDs');
+    } else {
+      deletedIds = [];
+      for (let i = 0; i < rawDeleted.length; i++) {
+        const item = rawDeleted[i];
+        if (typeof item !== 'string' || item.trim() === '') {
+          result.add(`deletedIds[${i}]`, 'must be a non-empty string');
+        } else {
+          deletedIds.push(item.trim());
+        }
+      }
+    }
+  }
+
+  const rawObservations = body.observations;
+  if (!Array.isArray(rawObservations)) {
+    result.add('observations', 'must be an array of observation objects');
+    return outcome(result, { sessionId, observations: [], deletedIds });
+  }
+
+  const observations: BatchObservationItem[] = [];
+
+  for (let idx = 0; idx < rawObservations.length; idx++) {
+    const rawItem = rawObservations[idx];
+    if (typeof rawItem !== 'object' || rawItem === null || Array.isArray(rawItem)) {
+      result.add(`observations[${idx}]`, 'must be an object');
+      continue;
+    }
+
+    const itemBody = rawItem as Body;
+    const itemPrefix = `observations[${idx}]`;
+
+    let id: string | undefined;
+    if (has(itemBody, 'id')) {
+      const rawId = itemBody.id;
+      if (rawId !== undefined && rawId !== null && rawId !== '') {
+        if (typeof rawId !== 'string') {
+          result.add(`${itemPrefix}.id`, 'must be a string');
+        } else if (rawId.trim() === '') {
+          result.add(`${itemPrefix}.id`, 'must not be empty');
+        } else {
+          id = rawId.trim();
+        }
+      }
+    }
+
+    let clientRowId: string | undefined;
+    if (has(itemBody, 'clientRowId')) {
+      if (typeof itemBody.clientRowId === 'string') {
+        clientRowId = itemBody.clientRowId;
+      }
+    }
+
+    const itemType = testType(itemBody, {
+      add: (field, msg) => result.add(`${itemPrefix}.${field}`, msg),
+    } as ValidationResult);
+
+    const itemIndex = sequenceIndex(itemBody, {
+      add: (field, msg) => result.add(`${itemPrefix}.${field}`, msg),
+    } as ValidationResult);
+
+    const itemData = observationData(itemBody, {
+      add: (field, msg) => result.add(`${itemPrefix}.${field}`, msg),
+    } as ValidationResult, itemType);
+
+    observations.push({
+      id,
+      clientRowId,
+      testType: itemType ?? 'WEIGHING_PERFORMANCE',
+      sequenceIndex: itemIndex ?? idx,
+      observationData: itemData ?? {},
+    });
+  }
+
+  return outcome(result, {
+    sessionId,
+    observations,
+    deletedIds,
+  });
 }

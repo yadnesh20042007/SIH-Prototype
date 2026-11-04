@@ -1,21 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { observationFingerprint } from '@/lib/db/observation-fingerprint';
 
-const { testObservationMock } = vi.hoisted(() => ({
+const { testObservationMock, testSessionMock } = vi.hoisted(() => ({
   testObservationMock: {
     create: vi.fn(),
     findMany: vi.fn(),
     findUnique: vi.fn(),
+    findFirst: vi.fn(),
     update: vi.fn(),
     delete: vi.fn(),
+    deleteMany: vi.fn(),
+  },
+  testSessionMock: {
+    findUnique: vi.fn(),
   },
 }));
 
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     testObservation: testObservationMock,
-    $transaction: async (callback: (tx: { testObservation: typeof testObservationMock }) => unknown) =>
-      callback({ testObservation: testObservationMock }),
+    testSession: testSessionMock,
+    $transaction: async (callback: (tx: { testObservation: typeof testObservationMock; testSession: typeof testSessionMock }) => unknown) =>
+      callback({ testObservation: testObservationMock, testSession: testSessionMock }),
   },
 }));
 
@@ -26,6 +32,7 @@ import {
   DatabaseNotFoundError,
 } from '@/lib/db/errors';
 import {
+  batchSaveTestObservations,
   createTestObservation,
   deleteTestObservation,
   getTestObservationById,
@@ -188,5 +195,92 @@ describe('TestObservation service unit tests (mocked Prisma)', () => {
 
     await expect(deleteTestObservation('observation-1')).rejects.toBeInstanceOf(DatabaseConflictError);
     expect(testObservationMock.delete).not.toHaveBeenCalled();
+  });
+
+  describe('batchSaveTestObservations', () => {
+    it('creates new observations, updates existing observations, and deletes removed rows atomically', async () => {
+      testSessionMock.findUnique.mockResolvedValue({ id: 'session-1', status: 'IN_PROGRESS' });
+      testObservationMock.deleteMany.mockResolvedValue({ count: 1 });
+      testObservationMock.findMany.mockResolvedValue([{ id: 'observation-existing-1' }]);
+      testObservationMock.findFirst.mockResolvedValue(persistedObservation);
+      testObservationMock.update.mockResolvedValue({
+        ...persistedObservation,
+        id: 'observation-existing-1',
+        sequenceIndex: 1,
+      });
+      testObservationMock.create.mockResolvedValue({
+        ...persistedObservation,
+        id: 'observation-new-2',
+        sequenceIndex: 2,
+      });
+
+      const batchPayload = {
+        sessionId: 'session-1',
+        deletedIds: ['obs-to-delete-1'],
+        observations: [
+          {
+            id: 'observation-existing-1',
+            clientRowId: 'client-row-1',
+            testType: 'WEIGHING_PERFORMANCE' as const,
+            sequenceIndex: 1,
+            observationData,
+          },
+          {
+            clientRowId: 'client-row-2',
+            testType: 'WEIGHING_PERFORMANCE' as const,
+            sequenceIndex: 2,
+            observationData,
+          },
+        ],
+      };
+
+      const result = await batchSaveTestObservations(batchPayload);
+
+      expect(testSessionMock.findUnique).toHaveBeenCalledWith({ where: { id: 'session-1' } });
+      expect(testObservationMock.deleteMany).toHaveBeenCalledWith({
+        where: { id: { in: ['obs-to-delete-1'] }, sessionId: 'session-1' },
+      });
+      expect(testObservationMock.update).toHaveBeenCalledWith({
+        where: { id: 'observation-existing-1' },
+        data: {
+          sequenceIndex: 1,
+          testType: 'WEIGHING_PERFORMANCE',
+          observationData,
+          observationFingerprint: observationFingerprint(observationData),
+        },
+      });
+      expect(testObservationMock.create).toHaveBeenCalledWith({
+        data: {
+          sessionId: 'session-1',
+          testType: 'WEIGHING_PERFORMANCE',
+          sequenceIndex: 2,
+          observationData,
+          observationFingerprint: observationFingerprint(observationData),
+        },
+      });
+
+      expect(result.deletedCount).toBe(1);
+      expect(result.savedObservations).toHaveLength(2);
+      expect(result.savedObservations[0].clientRowId).toBe('client-row-1');
+      expect(result.savedObservations[1].clientRowId).toBe('client-row-2');
+    });
+
+    it('rejects batch save when session is not found', async () => {
+      testSessionMock.findUnique.mockResolvedValue(null);
+
+      await expect(batchSaveTestObservations({
+        sessionId: 'nonexistent-session',
+        observations: [],
+      })).rejects.toBeInstanceOf(DatabaseNotFoundError);
+    });
+
+    it('rejects batch save when session is locked/approved', async () => {
+      testSessionMock.findUnique.mockResolvedValue({ id: 'session-1', status: 'APPROVED' });
+
+      await expect(batchSaveTestObservations({
+        sessionId: 'session-1',
+        observations: [],
+      })).rejects.toBeInstanceOf(DatabaseConflictError);
+    });
   });
 });

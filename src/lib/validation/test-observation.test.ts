@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   validateTestObservationCreate,
   validateTestObservationUpdate,
+  validateBatchTestObservations,
 } from './test-observation';
 
 const weighingData = {
@@ -174,5 +175,83 @@ describe('TestObservation validation', () => {
 
   it('rejects a non-object update payload', () => {
     expect(validateTestObservationUpdate([]).success).toBe(false);
+  });
+
+  describe('validateBatchTestObservations', () => {
+    it('accepts a valid batch payload with mixed observation types and deleted IDs', () => {
+      const result = validateBatchTestObservations({
+        sessionId: 'session-123',
+        deletedIds: ['obs-del-1', 'obs-del-2'],
+        observations: [
+          {
+            clientRowId: 'row-w-1',
+            testType: 'WEIGHING_PERFORMANCE',
+            sequenceIndex: 0,
+            observationData: weighingData,
+          },
+          {
+            id: 'obs-existing-2',
+            clientRowId: 'row-rep-1',
+            testType: 'REPEATABILITY',
+            sequenceIndex: 0,
+            observationData: {
+              testLoad: 20,
+              indications: [20, 20.01, 19.99],
+              autoZeroOrTrackingActive: false,
+            },
+          },
+        ],
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.data?.sessionId).toBe('session-123');
+      expect(result.data?.deletedIds).toEqual(['obs-del-1', 'obs-del-2']);
+      expect(result.data?.observations).toHaveLength(2);
+      expect(result.data?.observations[0].clientRowId).toBe('row-w-1');
+      expect(result.data?.observations[1].id).toBe('obs-existing-2');
+    });
+
+    it('rejects missing or empty sessionId', () => {
+      const result = validateBatchTestObservations({
+        sessionId: '  ',
+        observations: [],
+      });
+      expect(result.success).toBe(false);
+      expect(result.errors).toContainEqual({ field: 'sessionId', message: 'must not be empty' });
+    });
+
+    it('rejects non-array observations', () => {
+      const result = validateBatchTestObservations({
+        sessionId: 'session-1',
+        observations: 'not-array',
+      });
+      expect(result.success).toBe(false);
+      expect(result.errors).toContainEqual({ field: 'observations', message: 'must be an array of observation objects' });
+    });
+
+    it('identifies item-level validation errors with exact indices', () => {
+      const result = validateBatchTestObservations({
+        sessionId: 'session-1',
+        observations: [
+          {
+            testType: 'WEIGHING_PERFORMANCE',
+            sequenceIndex: 0,
+            observationData: { ...weighingData, load: 'not-number' },
+          },
+        ],
+      });
+      expect(result.success).toBe(false);
+      expect(result.errors.some(e => e.field === 'observations[0].observationData.load')).toBe(true);
+    });
+
+    it('rejects invalid deletedIds', () => {
+      const result = validateBatchTestObservations({
+        sessionId: 'session-1',
+        observations: [],
+        deletedIds: ['valid-id', '  '],
+      });
+      expect(result.success).toBe(false);
+      expect(result.errors).toContainEqual({ field: 'deletedIds[1]', message: 'must be a non-empty string' });
+    });
   });
 });
