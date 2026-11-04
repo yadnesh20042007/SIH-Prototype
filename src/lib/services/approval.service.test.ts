@@ -4,6 +4,7 @@ import { instrumentConfigFingerprint } from '@/lib/db/observation-fingerprint';
 
 const mocks = vi.hoisted(() => ({
   approval: { create: vi.fn(), findMany: vi.fn(), findUnique: vi.fn() },
+  auditLog: { create: vi.fn() },
   instrument: { findUnique: vi.fn() },
   testObservation: { findMany: vi.fn() },
   testResult: { findMany: vi.fn() },
@@ -16,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     approval: mocks.approval,
+    auditLog: mocks.auditLog,
     instrument: mocks.instrument,
     testObservation: mocks.testObservation,
     testResult: mocks.testResult,
@@ -140,12 +142,57 @@ describe('Approval service unit tests (mocked Prisma)', () => {
     vi.resetAllMocks();
     mocks.transaction.mockImplementation(async (callback) => callback({
       approval: mocks.approval,
+      auditLog: mocks.auditLog,
       instrument: mocks.instrument,
       testObservation: mocks.testObservation,
       testResult: mocks.testResult,
       testSession: mocks.testSession,
       testSessionSnapshot: mocks.testSessionSnapshot,
       user: mocks.user,
+    }));
+  });
+
+  it('identifies demo data sessions during approval workflow and creates audit trail', async () => {
+    installReadyState();
+    const demoObs = observations.map(o => ({
+      ...o,
+      observationData: { ...o.observationData, isDemo: true },
+    }));
+    const demoResults = testTypes.map((testType) => ({
+      testType,
+      rulesetVersionId: 'ruleset-1',
+      createdAt: resultTime,
+      evaluatedObservationFingerprint: logicalObservationFingerprint(
+        demoObs.filter(row => row.testType === testType)
+      ),
+      evaluatedConfigFingerprint: currentConfigFp,
+    }));
+    mocks.testObservation.findMany.mockResolvedValue(demoObs);
+    mocks.testResult.findMany.mockResolvedValue(demoResults);
+    mocks.auditLog.create.mockResolvedValue({ id: 'audit-1' });
+
+    const result = await createApproval({
+      sessionId: 'session-1',
+      action: 'SUBMIT_FOR_REVIEW',
+      comments: 'Initial demo testing',
+    }, 'technician-1');
+
+    expect(result.session.status).toBe('PENDING_REVIEW');
+    expect(mocks.approval.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        comments: expect.stringContaining('[DEMO DATA SESSION]'),
+      }),
+    }));
+    expect(mocks.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        entityType: 'TestSession',
+        entityId: 'session-1',
+        action: 'SUBMIT',
+        after: expect.objectContaining({
+          isDemo: true,
+          notice: expect.stringContaining('simulated demonstration data'),
+        }),
+      }),
     }));
   });
 

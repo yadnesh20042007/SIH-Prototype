@@ -1,8 +1,9 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { reportMock, testSessionMock, transactionMock, renderMock, fsMock } = vi.hoisted(() => ({
+const { reportMock, testSessionMock, auditLogMock, transactionMock, renderMock, fsMock } = vi.hoisted(() => ({
   reportMock: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), findMany: vi.fn(), findUnique: vi.fn() },
   testSessionMock: { findUnique: vi.fn() },
+  auditLogMock: { create: vi.fn() },
   transactionMock: vi.fn(),
   renderMock: vi.fn(),
   fsMock: { mkdir: vi.fn(), readFile: vi.fn(), stat: vi.fn(), unlink: vi.fn(), writeFile: vi.fn() },
@@ -50,6 +51,20 @@ function currentResults() {
   });
 }
 
+function demoResults(demoObs: typeof observations) {
+  const config = instrumentConfigFingerprint(instrument as never, 'INITIAL_VERIFICATION');
+  return ['WEIGHING_PERFORMANCE', 'REPEATABILITY', 'ECCENTRIC_LOADING'].map((testType, index) => {
+    const rows = demoObs.filter(item => item.testType === testType);
+    return {
+      id: `result-${index}`, sessionId: 'session-1', testType, outcome: 'PASS',
+      maxAbsoluteError: decimal('0'), mpe: decimal('0.01'), repeatabilityRange: testType === 'REPEATABILITY' ? decimal('0') : null,
+      r76Reference: `Persisted reference ${testType}`, explanation: `Persisted explanation ${testType}`,
+      rulesetVersionId: 'ruleset-1', complianceTrace: { references: [], calculationSteps: [], comparison: { formula: 'stored', substituted: 'stored', passed: true } },
+      evaluatedObservationFingerprint: logicalObservationFingerprint(rows), evaluatedConfigFingerprint: config, createdAt: date,
+    };
+  });
+}
+
 function session(overrides: Record<string, unknown> = {}) {
   return {
     id: 'session-1', instrumentId: 'instrument-1', verificationContext: 'INITIAL_VERIFICATION', status: 'APPROVED',
@@ -75,7 +90,9 @@ describe('Report service unit tests (mocked Prisma and filesystem)', () => {
   beforeEach(() => {
     process.env.NEXT_PUBLIC_APP_URL = 'https://sih-prototype-xi-eight.vercel.app';
     vi.clearAllMocks();
-    transactionMock.mockImplementation(async (callback: (tx: unknown) => unknown) => callback({ testSession: testSessionMock, report: reportMock }));
+    transactionMock.mockImplementation(async (callback: (tx: unknown) => unknown) =>
+      callback({ testSession: testSessionMock, report: reportMock, auditLog: auditLogMock })
+    );
     testSessionMock.findUnique.mockResolvedValue(session());
     reportMock.findFirst.mockResolvedValue(null);
     reportMock.create.mockResolvedValue(report);
@@ -103,6 +120,37 @@ describe('Report service unit tests (mocked Prisma and filesystem)', () => {
     testSessionMock.findUnique.mockResolvedValue(session({ status: 'PENDING_APPROVAL' }));
     await expect(generateApprovedSessionReport('session-1')).rejects.toBeInstanceOf(ReportEligibilityError);
     expect(reportMock.create).not.toHaveBeenCalled();
+    expect(auditLogMock.create).not.toHaveBeenCalled();
+  });
+
+  it('emits an AuditLog event when a report is created and issued, identifying demo status', async () => {
+    const demoObs = observations.map(obs => ({
+      ...obs,
+      observationData: { ...obs.observationData, isDemo: true, dataSource: 'DEMO_DATA' },
+    }));
+    const demoSession = session({
+      observations: demoObs,
+      results: demoResults(demoObs),
+    });
+    testSessionMock.findUnique.mockResolvedValue(demoSession);
+    auditLogMock.create.mockResolvedValue({ id: 'audit-rep-1' });
+
+    const result = await generateApprovedSessionReport('session-1');
+    expect(result.id).toBe('report-1');
+    expect(auditLogMock.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        entityType: 'Report',
+        entityId: 'report-1',
+        sessionId: 'session-1',
+        action: 'GENERATE_REPORT',
+        after: expect.objectContaining({
+          reportId: 'report-1',
+          sessionId: 'session-1',
+          isDemo: true,
+          notice: expect.stringContaining('simulated demonstration session'),
+        }),
+      }),
+    }));
   });
 
   it('rejects missing, stale, and conflicting persisted results', async () => {
@@ -189,6 +237,17 @@ describe('Report service unit tests (mocked Prisma and filesystem)', () => {
       complianceOutcome: 'PASS', revokedAt: null,
     });
     expect(result[0]).not.toHaveProperty('qrVerificationId');
+  });
+
+  it('correctly flags demo reports in repository records', async () => {
+    const demoSession = session({
+      observations: [
+        { ...observations[0], observationData: { ...observations[0].observationData, isDemo: true } },
+      ],
+    });
+    reportMock.findMany.mockResolvedValue([{ ...report, session: demoSession }]);
+    const result = await listReports({ state: 'ALL' });
+    expect(result[0].isDemo).toBe(true);
   });
 
   it('builds database search across reference, manufacturer, and model', async () => {

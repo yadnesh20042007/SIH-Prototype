@@ -242,19 +242,23 @@ export async function createApproval(
         await assertResultsReady(tx, session);
       }
 
+      // Check whether this session contains demo observation data
+      const existingObs = await tx.testObservation.findMany({ where: { sessionId: session.id } });
+      const isDemoSession = existingObs.some((obs) => {
+        const d = obs.observationData as Record<string, unknown> | undefined;
+        return Boolean(d && (d.isDemo === true || d.dataSource === 'DEMO_DATA'));
+      });
+
       // If submitting for review, create a snapshot of observations and results
       if (input.action === 'SUBMIT_FOR_REVIEW') {
-        const [observations, results] = await Promise.all([
-          tx.testObservation.findMany({ where: { sessionId: session.id } }),
-          tx.testResult.findMany({ where: { sessionId: session.id } }),
-        ]);
+        const results = await tx.testResult.findMany({ where: { sessionId: session.id } });
         
         const nextRevision = transition.revisionNumber ?? session.revisionNumber;
         await tx.testSessionSnapshot.create({
           data: {
             sessionId: session.id,
             revisionNumber: nextRevision,
-            observationsData: observations as any,
+            observationsData: existingObs as any,
             resultsData: results as any,
           }
         });
@@ -268,17 +272,58 @@ export async function createApproval(
         throw new DatabaseConflictError('TestSession workflow state changed concurrently');
       }
 
+      let finalComments = input.comments;
+      if (isDemoSession) {
+        const demoPrefix = '[DEMO DATA SESSION]';
+        if (!finalComments || finalComments.trim() === '') {
+          finalComments = demoPrefix;
+        } else if (!finalComments.includes('DEMO DATA')) {
+          finalComments = `${demoPrefix} ${finalComments}`;
+        }
+      }
+
       const approval = await tx.approval.create({
         data: {
           sessionId: input.sessionId,
           userId: authenticatedUserId,
           action: input.action,
           sessionRevision: transition.revisionNumber ?? session.revisionNumber,
-          ...(input.comments !== undefined ? { comments: input.comments } : {}),
+          ...(finalComments !== undefined ? { comments: finalComments } : {}),
           ...(input.createdAt !== undefined ? { createdAt: input.createdAt } : {}),
         },
         include: { user: { select: { id: true, name: true, role: true } } },
       });
+
+      // Append-only system audit log recording using existing Prisma AuditLog model
+      const auditActionMap: Record<ApprovalActionValue, 'SUBMIT' | 'APPROVE' | 'REJECT' | 'UPDATE'> = {
+        SUBMIT_FOR_REVIEW: 'SUBMIT',
+        REVIEW_APPROVE: 'APPROVE',
+        FINAL_APPROVE: 'APPROVE',
+        REVIEW_REJECT: 'REJECT',
+        FINAL_REJECT: 'REJECT',
+        RETURN: 'UPDATE',
+        CANCEL: 'UPDATE',
+      };
+      const auditDelegate = (tx as unknown as { auditLog?: { create: (args: unknown) => Promise<unknown> } }).auditLog;
+      if (auditDelegate && typeof auditDelegate.create === 'function') {
+        await auditDelegate.create({
+          data: {
+            entityType: 'TestSession',
+            entityId: session.id,
+            sessionId: session.id,
+            userId: authenticatedUserId,
+            action: auditActionMap[input.action],
+            before: { status: session.status },
+            after: {
+              status: transition.status,
+              action: input.action,
+              isDemo: isDemoSession,
+              revisionNumber: transition.revisionNumber ?? session.revisionNumber,
+              ...(isDemoSession ? { notice: 'Session contains simulated demonstration data' } : {}),
+            },
+          },
+        });
+      }
       const updatedSession = await tx.testSession.findUnique({ where: { id: session.id } });
       if (!updatedSession) throw new DatabaseNotFoundError('TestSession not found');
 

@@ -1,4 +1,4 @@
-import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb, degrees, type PDFFont, type PDFPage } from 'pdf-lib';
 import QRCode from 'qrcode';
 import { selectTests } from '@/lib/r76/test-selection/engine';
 import { VerificationContext, TestType, InstrumentType, AccuracyClass, normalizeVerificationContext, isTypeEvaluationContext } from '@/lib/r76/types';
@@ -144,6 +144,11 @@ export async function renderR76ReportPdf(data: R76ReportData): Promise<Uint8Arra
     data.session.verificationContext
   );
 
+  const isDemoSession = data.session.observations.some((obs) => {
+    const d = obs.observationData as Record<string, unknown> | undefined;
+    return Boolean(d && (d.isDemo === true || d.dataSource === 'DEMO_DATA'));
+  });
+
   function addPage(title?: string): void {
     page = document.addPage(A4);
     y = A4[1] - MARGIN;
@@ -168,7 +173,30 @@ export async function renderR76ReportPdf(data: R76ReportData): Promise<Uint8Arra
       thickness: 0.7,
       color: rgb(0.55, 0.6, 0.65),
     });
-    y -= 22;
+    y -= 10;
+
+    if (isDemoSession) {
+      page.drawRectangle({
+        x: MARGIN,
+        y: y - 12,
+        width: CONTENT_WIDTH,
+        height: 15,
+        color: rgb(0.98, 0.92, 0.92),
+        borderColor: rgb(0.85, 0.2, 0.2),
+        borderWidth: 0.8,
+      });
+      page.drawText('DEMO DATA — NOT A REAL TEST RESULT — NOT FOR LEGAL USE', {
+        x: MARGIN + 8,
+        y: y - 8,
+        size: 7.2,
+        font: bold,
+        color: rgb(0.75, 0.1, 0.1),
+      });
+      y -= 18;
+    } else {
+      y -= 12;
+    }
+
     if (title) heading(title, 15);
   }
 
@@ -431,7 +459,9 @@ export async function renderR76ReportPdf(data: R76ReportData): Promise<Uint8Arra
     ? `INCOMPLETE (${incompleteTests.length} required test(s) not performed or incomplete: ${incompleteTestNames.join(', ')})`
     : 'COMPLETE (All applicable test procedures performed)';
 
-  const documentClassification = anyTechnicalFail
+  const documentClassification = isDemoSession
+    ? 'SIMULATED DEMO EVALUATION REPORT (NOT FOR LEGAL USE)'
+    : anyTechnicalFail
     ? anyIncomplete
       ? 'NON-COMPLIANCE TEST REPORT (INCOMPLETE TESTING)'
       : 'NON-COMPLIANCE TEST REPORT'
@@ -446,7 +476,12 @@ export async function renderR76ReportPdf(data: R76ReportData): Promise<Uint8Arra
       : '1. General Information concerning the Instrument'
   );
 
-  if (anyTechnicalFail && anyIncomplete) {
+  if (isDemoSession) {
+    text(
+      'CRITICAL NOTICE — SIMULATED DEMO DATA: This report was generated using synthetic demonstration readings. It is NOT a real test result, does not reflect physical measurements on an actual weighing instrument, and CANNOT be used for legal metrology, statutory verification, or official type approval. Every observation was artificially generated for software demonstration purposes.',
+      { size: 8, color: rgb(0.75, 0.1, 0.1), gap: 9 }
+    );
+  } else if (anyTechnicalFail && anyIncomplete) {
     text(
       `NOTICE: This document records metrological NON-COMPLIANCE under OIML R 76-1:2006. In addition, required regulatory testing is INCOMPLETE (${incompleteTestNames.join(', ')}). This report does NOT represent a complete regulatory evaluation and cannot be used for statutory verification or type approval.`,
       { size: 8, color: rgb(0.7, 0.15, 0.15), gap: 9 }
@@ -471,6 +506,7 @@ export async function renderR76ReportPdf(data: R76ReportData): Promise<Uint8Arra
   keyValues([
     ['Report / application reference', data.referenceNumber],
     ['Document classification', documentClassification],
+    ['Data provenance', isDemoSession ? 'SIMULATED DEMO DATA (Not an actual physical test)' : 'GENUINE TEST OBSERVATIONS'],
     ['Overall technical outcome', overallTechnicalOutcome],
     ['Evaluation procedure completeness', completenessDescription],
     ['Internal report ID', data.reportId],
@@ -513,6 +549,12 @@ export async function renderR76ReportPdf(data: R76ReportData): Promise<Uint8Arra
   ]);
 
   addPage(`2. Summary of ${contextShortName}`);
+  if (isDemoSession) {
+    text(
+      'DEMO DATA WARNING: All compliance outcomes and calculation traces in this report are derived entirely from synthetic demonstration readings. They do NOT certify that an actual physical instrument meets OIML R 76 requirements.',
+      { size: 7.5, color: rgb(0.75, 0.1, 0.1), gap: 8 }
+    );
+  }
   text(
     'This generated report summarizes the five OIML R 76 test modules supported by the evaluation engine.',
     { gap: 10 }
@@ -950,13 +992,40 @@ export async function renderR76ReportPdf(data: R76ReportData): Promise<Uint8Arra
     font: bold,
     color: rgb(0.06, 0.25, 0.43),
   });
-  text(`Report reference: ${data.referenceNumber}`, { size: 8, indent: 108, gap: 1 });
-  text(data.verificationUrl, { size: 7, indent: 108, color: rgb(0.35, 0.38, 0.42) });
-  y -= 68;
+  if (isDemoSession) {
+    page.drawText('[SIMULATED DEMO DATA REPORT — NOT FOR LEGAL USE]', {
+      x: MARGIN + 108,
+      y: y - 34,
+      size: 7.2,
+      font: bold,
+      color: rgb(0.75, 0.1, 0.1),
+    });
+    text(`Report reference: ${data.referenceNumber}`, { size: 8, indent: 108, gap: 1 });
+    text(data.verificationUrl, { size: 7, indent: 108, color: rgb(0.35, 0.38, 0.42) });
+    y -= 80;
+  } else {
+    text(`Report reference: ${data.referenceNumber}`, { size: 8, indent: 108, gap: 1 });
+    text(data.verificationUrl, { size: 7, indent: 108, color: rgb(0.35, 0.38, 0.42) });
+    y -= 68;
+  }
 
   const pages = document.getPages();
   pages.forEach((currentPage, index) => {
-    const footer = `Page ${index + 1} / ${pages.length}  |  ${data.referenceNumber}`;
+    if (isDemoSession) {
+      currentPage.drawText('DEMO DATA — NOT FOR LEGAL USE', {
+        x: 65,
+        y: 340,
+        size: 26,
+        font: bold,
+        color: rgb(0.92, 0.82, 0.82),
+        rotate: degrees(45),
+      });
+    }
+
+    const footer = isDemoSession
+      ? `Page ${index + 1} / ${pages.length}  |  ${data.referenceNumber}  |  [DEMO DATA — NOT A REAL TEST RESULT — NOT FOR LEGAL USE]`
+      : `Page ${index + 1} / ${pages.length}  |  ${data.referenceNumber}`;
+
     currentPage.drawLine({
       start: { x: MARGIN, y: 34 },
       end: { x: A4[0] - MARGIN, y: 34 },
@@ -966,15 +1035,27 @@ export async function renderR76ReportPdf(data: R76ReportData): Promise<Uint8Arra
     currentPage.drawText(footer, {
       x: MARGIN,
       y: 20,
-      size: 7,
-      font: regular,
-      color: rgb(0.4, 0.43, 0.46),
+      size: 6.8,
+      font: isDemoSession ? bold : regular,
+      color: isDemoSession ? rgb(0.7, 0.15, 0.15) : rgb(0.4, 0.43, 0.46),
     });
   });
 
-  document.setTitle(`${reportHeaderTitle} ${data.referenceNumber}`);
-  document.setSubject(`Approved NAWI test session ${data.session.id}`);
+  document.setTitle(
+    isDemoSession
+      ? `[DEMO DATA - NOT FOR LEGAL USE] ${reportHeaderTitle} ${data.referenceNumber}`
+      : `${reportHeaderTitle} ${data.referenceNumber}`
+  );
+  document.setSubject(
+    isDemoSession
+      ? `[SIMULATED DEMO DATA] Approved NAWI test session ${data.session.id}`
+      : `Approved NAWI test session ${data.session.id}`
+  );
   document.setCreator('NAWI R76 Compliance Testing');
-  document.setKeywords(['NAWI', 'OIML R76-2', 'qr-verification-v1']);
+  document.setKeywords(
+    isDemoSession
+      ? ['NAWI', 'OIML R76-2', 'qr-verification-v1', 'DEMO-DATA', 'SIMULATED']
+      : ['NAWI', 'OIML R76-2', 'qr-verification-v1']
+  );
   return document.save();
 }

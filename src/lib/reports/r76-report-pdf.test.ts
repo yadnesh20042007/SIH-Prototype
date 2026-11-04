@@ -197,4 +197,40 @@ describe('R76 report PDF generation', () => {
     const typeDoc = await PDFDocument.load(typePdf);
     expect(typeDoc.getPageCount()).toBeGreaterThan(initPageCount);
   });
+
+  it('marks PDF with prominent warnings and metadata when observations contain demo data', async () => {
+    const demoData: R76ReportData = JSON.parse(JSON.stringify(data));
+    demoData.session.observations = [
+      {
+        testType: 'WEIGHING_PERFORMANCE',
+        sequenceIndex: 0,
+        observationData: { isDemo: true, load: 10, indicatedValue: 10 },
+      },
+    ];
+
+    const pdf = await renderR76ReportPdf(demoData);
+    const doc = await PDFDocument.load(pdf);
+
+    expect(doc.getTitle()).toContain('[DEMO DATA - NOT FOR LEGAL USE]');
+    expect(doc.getSubject()).toContain('SIMULATED DEMO DATA');
+    expect(doc.getKeywords()).toContain('DEMO-DATA');
+  });
+
+  it('does not apply demo watermark or demo warnings to genuine observations', async () => {
+    const genuineData: R76ReportData = JSON.parse(JSON.stringify(data));
+    genuineData.session.observations = [
+      {
+        testType: 'WEIGHING_PERFORMANCE',
+        sequenceIndex: 0,
+        observationData: { isDemo: false, load: 10, indicatedValue: 10 },
+      },
+    ];
+
+    const pdf = await renderR76ReportPdf(genuineData);
+    const doc = await PDFDocument.load(pdf);
+
+    expect(doc.getTitle()).not.toContain('DEMO DATA');
+    expect(doc.getSubject()).not.toContain('Simulated');
+    expect(doc.getKeywords() ?? '').not.toContain('DEMO-DATA');
+  });
 });

@@ -9,6 +9,7 @@ const publicVerificationInclude = {
       instrument: { include: { manufacturer: true } },
       rulesetVersion: true,
       results: { select: { testType: true, outcome: true } },
+      observations: { select: { observationData: true } },
       approvals: {
         where: { action: 'FINAL_APPROVE' as const },
         orderBy: { createdAt: 'desc' as const },
@@ -26,6 +27,8 @@ export interface PublicReportVerification {
   status: 'VERIFIED' | 'REVOKED' | 'NOT_VALID';
   valid: boolean;
   revoked: boolean;
+  isDemo: boolean;
+  demoWarning?: string;
   reportReference: string;
   reportVersion: number;
   manufacturer: string;
@@ -139,10 +142,17 @@ export async function getPublicReportVerification(qrVerificationId: string): Pro
     const revoked = report.revokedAt !== null;
     const valid = !revoked && report.session.status === 'APPROVED';
     const instrument = report.session.instrument;
+    const observations = (report.session as { observations?: Array<{ observationData: unknown }> }).observations ?? [];
+    const isDemo = observations.some((o) => {
+      const data = o.observationData as Record<string, unknown> | undefined;
+      return Boolean(data && (data.isDemo === true || data.dataSource === 'DEMO_DATA'));
+    });
     return {
       status: revoked ? 'REVOKED' : valid ? 'VERIFIED' : 'NOT_VALID',
       valid,
       revoked,
+      isDemo,
+      ...(isDemo ? { demoWarning: 'DEMO DATA — NOT A REAL TEST RESULT — NOT FOR LEGAL USE' } : {}),
       reportReference: report.referenceNumber,
       reportVersion: report.version,
       manufacturer: instrument.manufacturer.name,

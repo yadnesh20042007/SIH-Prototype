@@ -14,6 +14,7 @@ import {
   type EccentricRowState,
 } from './types';
 import { validateEccentricLoadInput } from '@/lib/r76/calculations/eccentricity';
+import { DemoDataBanner } from './DemoDataBanner';
 
 interface EccentricLoadingSectionProps {
   rows: EccentricRowState[];
@@ -28,6 +29,10 @@ interface EccentricLoadingSectionProps {
   instrumentE?: number;
 
   nextId?: () => string;
+  onLoadDemoData?: () => void;
+  isDemoData?: boolean;
+  isDemoModified?: boolean;
+  onClearDemoData?: () => void;
 }
 
 export function EccentricLoadingSection({
@@ -40,6 +45,10 @@ export function EccentricLoadingSection({
   instrumentMax,
   instrumentE,
   nextId,
+  onLoadDemoData,
+  isDemoData,
+  isDemoModified,
+  onClearDemoData,
 }: EccentricLoadingSectionProps) {
   const points = numberOfSupportPoints && numberOfSupportPoints > 0 ? numberOfSupportPoints : 4;
   const prescribedLoad = instrumentMax ? Math.round((instrumentMax / 3) * 1e4) / 1e4 : undefined;
@@ -119,11 +128,19 @@ export function EccentricLoadingSection({
       icon={<ComplianceIcon name="eccentric" />}
       subtitle="Record observations for each supported load-receptor position."
       action={
-        <GhostButton onClick={addRow}>
-          + Add position
-        </GhostButton>
+        <div className="flex flex-wrap items-center gap-2">
+          {onLoadDemoData && (
+            <GhostButton onClick={onLoadDemoData}>
+              Load Demo Data
+            </GhostButton>
+          )}
+          <GhostButton onClick={addRow}>
+            + Add position
+          </GhostButton>
+        </div>
       }
     >
+      {isDemoData && <DemoDataBanner onClear={onClearDemoData} isModified={isDemoModified} />}
       <div className="mb-4 rounded-md border border-[#D9E2EC] bg-[#F9FBFC] p-3.5">
         <Checkbox
           label="Zero determined before each loading"

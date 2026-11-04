@@ -70,6 +70,7 @@ export interface ReportRepositoryRecord extends ReportRecord {
   instrumentType: string;
   accuracyClass: string;
   complianceOutcome: 'PASS' | 'FAIL' | 'REQUIRES_RETEST' | 'NOT_AVAILABLE';
+  isDemo?: boolean;
 }
 
 export class ReportEligibilityError extends DatabaseConflictError {
@@ -206,13 +207,47 @@ export async function generateApprovedSessionReport(testSessionId: string): Prom
         where: { sessionId: testSessionId, revokedAt: null },
         orderBy: { version: 'desc' },
       });
-      const report = existing ?? await tx.report.create({
+      if (existing) {
+        return { report: existing, session };
+      }
+
+      const report = await tx.report.create({
         data: {
           sessionId: testSessionId,
           referenceNumber: referenceNumber(session),
           version: 1,
         },
       });
+
+      const isDemo = session.observations?.some(o => {
+        const d = o.observationData as Record<string, unknown> | undefined;
+        return Boolean(d && (d.isDemo === true || d.dataSource === 'DEMO_DATA'));
+      }) ?? false;
+
+      const auditDelegate = (tx as unknown as { auditLog?: { create?: (args: unknown) => Promise<unknown> } }).auditLog;
+      if (auditDelegate && typeof auditDelegate.create === 'function') {
+        await auditDelegate.create({
+          data: {
+            entityType: 'Report',
+            entityId: report.id,
+            sessionId: testSessionId,
+            userId: session.approverId ?? session.technicianId ?? null,
+            action: 'GENERATE_REPORT',
+            before: null,
+            after: {
+              reportId: report.id,
+              referenceNumber: report.referenceNumber,
+              version: report.version,
+              sessionId: testSessionId,
+              isDemo,
+              notice: isDemo
+                ? 'Report issued for simulated demonstration session'
+                : 'Report certificate issued',
+            },
+          },
+        });
+      }
+
       return { report, session };
     }, { isolationLevel: 'Serializable', timeout: 20000 });
 
@@ -229,6 +264,7 @@ const reportRepositoryInclude = {
     include: {
       instrument: { include: { manufacturer: true } },
       results: { select: { testType: true, outcome: true } },
+      observations: { select: { observationData: true } },
     },
   },
 } satisfies Prisma.ReportInclude;
@@ -245,6 +281,10 @@ function repositoryOutcome(report: RepositoryReport): ReportRepositoryRecord['co
 
 function toRepositoryRecord(report: RepositoryReport): ReportRepositoryRecord {
   const instrument = report.session.instrument;
+  const isDemo = report.session.observations?.some(o => {
+    const data = o.observationData as Record<string, unknown> | undefined;
+    return Boolean(data && (data.isDemo === true || data.dataSource === 'DEMO_DATA'));
+  }) ?? false;
   return {
     ...toReportRecord(report),
     manufacturer: instrument.manufacturer.name,
@@ -252,6 +292,7 @@ function toRepositoryRecord(report: RepositoryReport): ReportRepositoryRecord {
     instrumentType: instrument.instrumentType,
     accuracyClass: instrument.accuracyClass,
     complianceOutcome: repositoryOutcome(report),
+    isDemo,
   };
 }
 

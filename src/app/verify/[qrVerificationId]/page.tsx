@@ -48,6 +48,11 @@ export default async function VerifyReportPage({ params }: { params: Promise<{ q
     badgeText = 'REPORT NOT VALID';
     title = 'Report Not Valid';
     summaryText = 'This report reference does not correspond to an approved session.';
+  } else if (report.isDemo) {
+    tone = 'warn';
+    badgeText = 'SIMULATED DEMO DATA — NOT A REAL TEST RESULT';
+    title = 'Simulated Demonstration Record';
+    summaryText = 'CRITICAL NOTICE: This report was generated using synthetic demonstration data for evaluation purposes. It is NOT a real test result, does not reflect physical measurements on an actual weighing instrument, and CANNOT be used for legal metrology or statutory verification.';
   } else if (isFail) {
     tone = 'fail';
     badgeText = 'FINALIZED NON-COMPLIANT TEST REPORT';
@@ -130,6 +135,17 @@ export default async function VerifyReportPage({ params }: { params: Promise<{ q
             <p className="m-0 mt-2 text-[0.76rem] leading-relaxed text-[#475467]">{summaryText}</p>
           </div>
           <div className="grid gap-6 p-6">
+            {report.isDemo && (
+              <div className="rounded-md border border-[#FCD34D] bg-[#FFFBEB] p-4 text-[0.76rem] text-[#92400E]">
+                <div className="flex items-center gap-2 font-bold uppercase tracking-wider text-[#B45309]">
+                  <span className="rounded bg-[#F59E0B] px-1.5 py-0.5 text-[0.62rem] text-white">DEMO DATA</span>
+                  NOT A REAL TEST RESULT — NOT FOR LEGAL USE
+                </div>
+                <p className="m-0 mt-1.5 text-[#78350F]">
+                  This test record was generated using synthetic demonstration data. It does not represent genuine measurements taken from an actual weighing instrument and cannot be used for official compliance verification.
+                </p>
+              </div>
+            )}
             <section><h2 className="m-0 border-b border-[#D9E2EC] pb-2 text-[0.72rem] font-bold uppercase tracking-[0.09em] text-[#344054]">Report</h2><dl className="mt-3 grid grid-cols-1 gap-3 text-[0.75rem] sm:grid-cols-2"><div><dt className="text-[#667085]">Reference</dt><dd className="m-0 mt-0.5 font-bold text-[#1D2226]">{report.reportReference}</dd></div><div><dt className="text-[#667085]">Version</dt><dd className="m-0 mt-0.5 font-semibold">{report.reportVersion}</dd></div><div><dt className="text-[#667085]">Generated</dt><dd className="m-0 mt-0.5 font-semibold">{date(report.issuedAt)}</dd></div><div><dt className="text-[#667085]">Final approval</dt><dd className="m-0 mt-0.5 font-semibold">{date(report.finalApprovalAt)}</dd></div></dl></section>
             <section><h2 className="m-0 border-b border-[#D9E2EC] pb-2 text-[0.72rem] font-bold uppercase tracking-[0.09em] text-[#344054]">Instrument</h2><dl className="mt-3 grid grid-cols-2 gap-3 text-[0.75rem] sm:grid-cols-3"><div><dt className="text-[#667085]">Manufacturer</dt><dd className="m-0 mt-0.5 font-semibold">{report.manufacturer}</dd></div><div><dt className="text-[#667085]">Model</dt><dd className="m-0 mt-0.5 font-semibold">{report.model}</dd></div><div><dt className="text-[#667085]">Type</dt><dd className="m-0 mt-0.5 font-semibold">{display(report.instrumentType)}</dd></div><div><dt className="text-[#667085]">Accuracy class</dt><dd className="m-0 mt-0.5 font-semibold">{report.accuracyClass}</dd></div><div><dt className="text-[#667085]">Max / Min</dt><dd className="m-0 mt-0.5 font-semibold">{report.max} / {report.min} kg</dd></div><div><dt className="text-[#667085]">e / d</dt><dd className="m-0 mt-0.5 font-semibold">{report.e} / {report.d} kg</dd></div></dl></section>
             <section><h2 className="m-0 border-b border-[#D9E2EC] pb-2 text-[0.72rem] font-bold uppercase tracking-[0.09em] text-[#344054]">Decision</h2><dl className="mt-3 grid grid-cols-1 gap-3 text-[0.75rem] sm:grid-cols-3"><div><dt className="text-[#667085]">Ruleset</dt><dd className="m-0 mt-0.5 font-semibold">{report.ruleset}</dd></div><div><dt className="text-[#667085]">Persisted compliance result</dt><dd className="m-0 mt-0.5 font-bold">{display(report.complianceResult)}</dd></div><div><dt className="text-[#667085]">Approval status</dt><dd className="m-0 mt-0.5 font-bold">{display(report.approvalStatus)}</dd></div></dl></section>

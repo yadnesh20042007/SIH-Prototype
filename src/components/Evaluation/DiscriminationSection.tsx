@@ -1,16 +1,25 @@
 import React from 'react';
 import { createDiscriminationRow, type DiscriminationRowState } from './types';
+import { DemoDataBanner } from './DemoDataBanner';
 
 interface DiscriminationSectionProps {
   rows: DiscriminationRowState[];
   onChange: (rows: DiscriminationRowState[]) => void;
   nextId?: () => string;
+  onLoadDemoData?: () => void;
+  isDemoData?: boolean;
+  isDemoModified?: boolean;
+  onClearDemoData?: () => void;
 }
 
 export function DiscriminationSection({
   rows,
   onChange,
   nextId,
+  onLoadDemoData,
+  isDemoData,
+  isDemoModified,
+  onClearDemoData,
 }: DiscriminationSectionProps) {
   const handleUpdate = (id: string, field: keyof DiscriminationRowState, value: string) => {
     const updated = rows.map((r) => (r.id === id ? { ...r, [field]: value } : r));
@@ -30,12 +39,25 @@ export function DiscriminationSection({
 
   return (
     <div className="rounded-xl border border-[#E5E7EB] bg-white p-6 shadow-sm">
-      <div className="mb-4">
-        <h3 className="text-sm font-semibold text-[#101828]">Discrimination</h3>
-        <p className="mt-1 text-xs text-[#667085]">
-          For digital indications, tested at Min, 0.5 Max, and Max. Apply additional load of 1.4d. (R76-1 3.8.2.2)
-        </p>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-semibold text-[#101828]">Discrimination</h3>
+          <p className="mt-1 text-xs text-[#667085]">
+            For digital indications, tested at Min, 0.5 Max, and Max. Apply additional load of 1.4d. (R76-1 3.8.2.2)
+          </p>
+        </div>
+        {onLoadDemoData && (
+          <button
+            type="button"
+            onClick={onLoadDemoData}
+            className="rounded-[5px] border border-[#A9C9E8] bg-[#F6FAFE] px-3 py-1.5 text-[0.72rem] font-bold text-[#0A66C2] transition-colors hover:border-[#0A66C2] hover:bg-[#EAF3FC]"
+          >
+            Load Demo Data
+          </button>
+        )}
       </div>
+
+      {isDemoData && <DemoDataBanner onClear={onClearDemoData} isModified={isDemoModified} />}
 
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm text-[#344054]">

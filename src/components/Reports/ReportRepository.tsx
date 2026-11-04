@@ -24,7 +24,7 @@ export function ReportRepository({ reports }: { reports: ReportRepositoryRecord[
     const actions = reportActionUrls(report);
     const revoked = report.revokedAt !== null;
     return <tr key={report.id} className="border-t border-[#E4EAF0] align-top text-[#344054]">
-      <td className="px-4 py-3"><p className="m-0 font-semibold text-[#1D2226]">{report.referenceNumber}</p><p className="m-0 mt-1 text-xs text-[#667085]">Version {report.version}</p></td>
+      <td className="px-4 py-3"><div className="flex items-center gap-1.5"><p className="m-0 font-semibold text-[#1D2226]">{report.referenceNumber}</p>{report.isDemo && <span className="rounded bg-[#FEF3F2] px-1.5 py-0.5 text-[0.6rem] font-bold text-[#B42318] border border-[#FECDCA]">DEMO</span>}</div><p className="m-0 mt-1 text-xs text-[#667085]">Version {report.version}</p></td>
       <td className="px-4 py-3"><p className="m-0 font-semibold">{report.manufacturer}</p><p className="m-0 mt-1 text-xs text-[#667085]">{report.instrumentModel} · {report.instrumentType.replaceAll('_', ' ')}</p></td>
       <td className="px-4 py-3">{report.accuracyClass}</td><td className="px-4 py-3 whitespace-nowrap">{dateLabel(report.issuedAt)}</td>
       <td className="px-4 py-3 font-semibold">{report.complianceOutcome.replaceAll('_', ' ')}</td><td className="px-4 py-3"><span className={`rounded-full px-2 py-1 text-xs font-semibold ${revoked ? 'bg-[#FEF3F2] text-[#B42318]' : 'bg-[#ECFDF3] text-[#027A48]'}`}>{revoked ? 'Revoked' : 'Active'}</span></td>

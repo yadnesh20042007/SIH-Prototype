@@ -52,4 +52,34 @@ describe('Public report verification service unit tests', () => {
     reportMock.findUnique.mockResolvedValue({ ...persisted, session: { ...persisted.session, results: [{ outcome: 'PASS' }, { outcome: 'REQUIRES_RETEST' }] } });
     await expect(getPublicReportVerification('public-verification-id')).resolves.toMatchObject({ complianceResult: 'REQUIRES_RETEST' });
   });
+
+  it('identifies demo sessions in public verification and provides prominent warning', async () => {
+    reportMock.findUnique.mockResolvedValue({
+      ...persisted,
+      session: {
+        ...persisted.session,
+        observations: [
+          { observationData: { isDemo: true, load: 10 } },
+        ],
+      },
+    });
+    const result = await getPublicReportVerification('public-verification-id');
+    expect(result.isDemo).toBe(true);
+    expect(result.demoWarning).toContain('DEMO DATA — NOT A REAL TEST RESULT');
+  });
+
+  it('marks genuine sessions without demo flag in public verification', async () => {
+    reportMock.findUnique.mockResolvedValue({
+      ...persisted,
+      session: {
+        ...persisted.session,
+        observations: [
+          { observationData: { isDemo: false, load: 10 } },
+        ],
+      },
+    });
+    const result = await getPublicReportVerification('public-verification-id');
+    expect(result.isDemo).toBe(false);
+    expect(result.demoWarning).toBeUndefined();
+  });
 });

@@ -26,6 +26,19 @@ import { DiscriminationSection } from './DiscriminationSection';
 import { ZeroSettingSection } from './ZeroSettingSection';
 import { ResultsSection } from './ResultsSection';
 import { ReportActions } from '@/components/Reports/ReportActions';
+import { ConfirmDemoModal } from './ConfirmDemoModal';
+import {
+  generateWeighingPerformanceDemo,
+  generateRepeatabilityDemo,
+  generateEccentricLoadingDemo,
+  generateDiscriminationDemo,
+  generateZeroSettingDemo,
+  hasWeighingReadings,
+  hasRepeatabilityReadings,
+  hasEccentricReadings,
+  hasDiscriminationReadings,
+  hasZeroSettingReadings,
+} from '@/lib/r76/demo-data';
 import {
   type SavedTestResultResponse,
   type StoredTestType,
@@ -75,19 +88,19 @@ interface SavedTestSessionResponse {
   id: string;
   instrumentId: string;
   verificationContext:
-    | 'TYPE_EVALUATION'
-    | 'INITIAL_VERIFICATION'
-    | 'SUBSEQUENT_VERIFICATION'
-    | 'SERVICE_INSPECTION';
+  | 'TYPE_EVALUATION'
+  | 'INITIAL_VERIFICATION'
+  | 'SUBSEQUENT_VERIFICATION'
+  | 'SERVICE_INSPECTION';
   status:
-    | 'DRAFT'
-    | 'IN_PROGRESS'
-    | 'PENDING_REVIEW'
-    | 'PENDING_APPROVAL'
-    | 'APPROVED'
-    | 'REJECTED'
-    | 'CANCELLED'
-    | 'RETURNED';
+  | 'DRAFT'
+  | 'IN_PROGRESS'
+  | 'PENDING_REVIEW'
+  | 'PENDING_APPROVAL'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'CANCELLED'
+  | 'RETURNED';
   rulesetVersionId: string;
 }
 
@@ -174,11 +187,11 @@ async function deletePersistedObservation(id: string): Promise<void> {
 async function fetchFreshness(sessionId: string): Promise<{
   testType: StoredTestType; state: string; evaluatedObservationFingerprint: string | null;
 }[]> {
-    const response = await fetch(`/api/test-results/freshness?testSessionId=${encodeURIComponent(sessionId)}`, { cache: 'no-store' });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(observationError(payload, response.status));
-    return payload;
-  }
+  const response = await fetch(`/api/test-results/freshness?testSessionId=${encodeURIComponent(sessionId)}`, { cache: 'no-store' });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(observationError(payload, response.status));
+  return payload;
+}
 
 
 /**
@@ -295,6 +308,52 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
   const [approvals, setApprovals] = useState<Array<{ id: string, action: string, comments: string | null, createdAt: string, user: { name: string, role: string } }>>([]);
   const [workflowMessage, setWorkflowMessage] = useState<{
     tone: 'error' | 'success';
+    text: string;
+  } | null>(null);
+  const [demoStatus, setDemoStatus] = useState<{
+    weighing: boolean;
+    repeatability: boolean;
+    eccentric: boolean;
+    discrimination: boolean;
+    zeroSetting: boolean;
+  }>({
+    weighing: false,
+    repeatability: false,
+    eccentric: false,
+    discrimination: false,
+    zeroSetting: false,
+  });
+  const [modifiedDemo, setModifiedDemo] = useState<{
+    weighing: boolean;
+    repeatability: boolean;
+    eccentric: boolean;
+    discrimination: boolean;
+    zeroSetting: boolean;
+  }>({
+    weighing: false,
+    repeatability: false,
+    eccentric: false,
+    discrimination: false,
+    zeroSetting: false,
+  });
+  const originalDemoSnapshot = useRef<{
+    weighing?: string;
+    repeatability?: string;
+    eccentric?: string;
+    discrimination?: string;
+    zeroSetting?: string;
+  }>({});
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    cancelLabel?: string;
+    onConfirm: () => void;
+    onCancel?: () => void;
+  } | null>(null);
+  const [demoMessage, setDemoMessage] = useState<{
+    tone: 'error' | 'success' | 'info';
     text: string;
   } | null>(null);
 
@@ -426,29 +485,29 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
         const repeatabilityRecord = repeatabilityRecords[0];
         const loadedRepeatability = repeatabilityRecord
           ? {
-              testLoad: String(repeatabilityRecord.observationData.testLoad ?? ''),
-              indications: Array.isArray(repeatabilityRecord.observationData.indications)
-                ? (repeatabilityRecord.observationData.indications as number[]).map(String)
-                : ['', '', ''],
-              autoZeroOrTrackingActive: Boolean(
-                repeatabilityRecord.observationData.autoZeroOrTrackingActive
-              ),
-              ...(Array.isArray(repeatabilityRecord.observationData.series)
-                ? {
-                    series: (
-                      repeatabilityRecord.observationData.series as Array<{
-                        seriesNumber: number;
-                        testLoad: number;
-                        indications: number[];
-                      }>
-                    ).map((s) => ({
-                      seriesNumber: s.seriesNumber,
-                      testLoad: String(s.testLoad),
-                      indications: Array.isArray(s.indications) ? s.indications.map(String) : [],
-                    })),
-                  }
-                : {}),
-            }
+            testLoad: String(repeatabilityRecord.observationData.testLoad ?? ''),
+            indications: Array.isArray(repeatabilityRecord.observationData.indications)
+              ? (repeatabilityRecord.observationData.indications as number[]).map(String)
+              : ['', '', ''],
+            autoZeroOrTrackingActive: Boolean(
+              repeatabilityRecord.observationData.autoZeroOrTrackingActive
+            ),
+            ...(Array.isArray(repeatabilityRecord.observationData.series)
+              ? {
+                series: (
+                  repeatabilityRecord.observationData.series as Array<{
+                    seriesNumber: number;
+                    testLoad: number;
+                    indications: number[];
+                  }>
+                ).map((s) => ({
+                  seriesNumber: s.seriesNumber,
+                  testLoad: String(s.testLoad),
+                  indications: Array.isArray(s.indications) ? s.indications.map(String) : [],
+                })),
+              }
+              : {}),
+          }
           : createDefaultRepeatability();
         if (repeatabilityRecord) loadedIds.repeatability = repeatabilityRecord.id;
         const loadedEccentric = eccentric.map((record) => {
@@ -479,10 +538,10 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
         const zeroSettingRecord = zeroSettingRecords[0];
         const loadedZeroSetting = zeroSettingRecord
           ? {
-              load: String(zeroSettingRecord.observationData.load),
-              indicatedValue: String(zeroSettingRecord.observationData.indicatedValue),
-              additionalLoad: String(zeroSettingRecord.observationData.additionalLoad ?? 0),
-            }
+            load: String(zeroSettingRecord.observationData.load),
+            indicatedValue: String(zeroSettingRecord.observationData.indicatedValue),
+            additionalLoad: String(zeroSettingRecord.observationData.additionalLoad ?? 0),
+          }
           : createDefaultZeroSetting();
         if (zeroSettingRecord) loadedIds.zeroSetting = zeroSettingRecord.id;
 
@@ -492,6 +551,48 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
         setDiscriminationRows(loadedDiscrimination.length ? loadedDiscrimination : [createDiscriminationRow(undefined, '')]);
         setZeroSetting(loadedZeroSetting);
         setObservationIds(loadedIds);
+        const checkRecordsDemo = (records: SavedTestObservationResponse[]): { isDemo: boolean; isModified: boolean } => {
+          let isDemo = false;
+          let isModified = false;
+          for (const record of records) {
+            const d = record.observationData as Record<string, unknown> | undefined;
+            if (d && (d.isDemo === true || d.dataSource === 'DEMO_DATA')) {
+              isDemo = true;
+            }
+            if (d && d.isModified === true) {
+              isModified = true;
+            }
+          }
+          return { isDemo, isModified };
+        };
+
+        const weighingDemoInfo = checkRecordsDemo(weighing);
+        const repeatabilityDemoInfo = checkRecordsDemo(repeatabilityRecords);
+        const eccentricDemoInfo = checkRecordsDemo(eccentric);
+        const discriminationDemoInfo = checkRecordsDemo(discrimination);
+        const zeroSettingDemoInfo = checkRecordsDemo(zeroSettingRecords);
+
+        setDemoStatus({
+          weighing: weighingDemoInfo.isDemo,
+          repeatability: repeatabilityDemoInfo.isDemo,
+          eccentric: eccentricDemoInfo.isDemo,
+          discrimination: discriminationDemoInfo.isDemo,
+          zeroSetting: zeroSettingDemoInfo.isDemo,
+        });
+
+        setModifiedDemo({
+          weighing: weighingDemoInfo.isModified,
+          repeatability: repeatabilityDemoInfo.isModified,
+          eccentric: eccentricDemoInfo.isModified,
+          discrimination: discriminationDemoInfo.isModified,
+          zeroSetting: zeroSettingDemoInfo.isModified,
+        });
+
+        if (weighingDemoInfo.isDemo) originalDemoSnapshot.current.weighing = JSON.stringify(loadedWeighing);
+        if (repeatabilityDemoInfo.isDemo) originalDemoSnapshot.current.repeatability = JSON.stringify(loadedRepeatability);
+        if (eccentricDemoInfo.isDemo) originalDemoSnapshot.current.eccentric = JSON.stringify(loadedEccentric);
+        if (discriminationDemoInfo.isDemo) originalDemoSnapshot.current.discrimination = JSON.stringify(loadedDiscrimination);
+        if (zeroSettingDemoInfo.isDemo) originalDemoSnapshot.current.zeroSetting = JSON.stringify(loadedZeroSetting);
         const storedResults = resultsData as SavedTestResultResponse[];
         const resultCounts = new Map<StoredTestType, number>();
         for (const storedResult of storedResults) {
@@ -594,6 +695,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           additionalLoad: parseNum(row.additionalLoad, `Weighing additional load (row ${index + 1})`),
           zeroError: parseNum(row.zeroError, `Weighing zero error (row ${index + 1})`),
           loadingDirection: row.loadingDirection,
+          ...(demoStatus.weighing ? { isDemo: true, dataSource: 'DEMO_DATA', ...(modifiedDemo.weighing ? { isModified: true } : {}) } : {}),
         };
         const existingId = nextIds.weighing[row.id];
         const saved = await persistObservation(existingId, existingId
@@ -625,15 +727,16 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           autoZeroOrTrackingActive: repeatability.autoZeroOrTrackingActive,
           ...(repeatability.series && repeatability.series.length > 0
             ? {
-                series: repeatability.series.map((s) => ({
-                  seriesNumber: s.seriesNumber,
-                  testLoad: parseNum(s.testLoad, `Series ${s.seriesNumber} test load`),
-                  indications: s.indications.map((val, i) =>
-                    parseNum(val, `Series ${s.seriesNumber} indication ${i + 1}`)
-                  ),
-                })),
-              }
+              series: repeatability.series.map((s) => ({
+                seriesNumber: s.seriesNumber,
+                testLoad: parseNum(s.testLoad, `Series ${s.seriesNumber} test load`),
+                indications: s.indications.map((val, i) =>
+                  parseNum(val, `Series ${s.seriesNumber} indication ${i + 1}`)
+                ),
+              })),
+            }
             : {}),
+          ...(demoStatus.repeatability ? { isDemo: true, dataSource: 'DEMO_DATA', ...(modifiedDemo.repeatability ? { isModified: true } : {}) } : {}),
         };
         const existingId = nextIds.repeatability ?? undefined;
         const saved = await persistObservation(existingId, existingId
@@ -665,6 +768,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           zeroError: parseNum(row.zeroError, `Eccentric zero error (${row.positionId || `row ${index + 1}`})`),
           autoZeroOrTrackingDisabled: row.autoZeroOrTrackingDisabled,
           zeroDeterminedBeforeEachLoading: eccentricZeroDetermined,
+          ...(demoStatus.eccentric ? { isDemo: true, dataSource: 'DEMO_DATA', ...(modifiedDemo.eccentric ? { isModified: true } : {}) } : {}),
         };
         const existingId = nextIds.eccentric[row.id];
         const saved = await persistObservation(existingId, existingId
@@ -690,6 +794,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           testLoad: parseNum(row.testLoad, `Discrimination test load (row ${index + 1})`),
           indicationBefore: parseNum(row.indicationBefore, `Discrimination indication before (row ${index + 1})`),
           indicationAfter: parseNum(row.indicationAfter, `Discrimination indication after (row ${index + 1})`),
+          ...(demoStatus.discrimination ? { isDemo: true, dataSource: 'DEMO_DATA', ...(modifiedDemo.discrimination ? { isModified: true } : {}) } : {}),
         };
         const existingId = nextIds.discrimination[row.id];
         const saved = await persistObservation(existingId, existingId
@@ -712,6 +817,7 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           load: parseNum(zeroSetting.load, 'Zero-setting test load'),
           indicatedValue: parseNum(zeroSetting.indicatedValue, 'Zero-setting indicated value'),
           additionalLoad: parseNum(zeroSetting.additionalLoad.trim() || '0', 'Zero-setting additional load'),
+          ...(demoStatus.zeroSetting ? { isDemo: true, dataSource: 'DEMO_DATA', ...(modifiedDemo.zeroSetting ? { isModified: true } : {}) } : {}),
         };
         const existingId = nextIds.zeroSetting ?? undefined;
         const saved = await persistObservation(existingId, existingId
@@ -959,109 +1065,109 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
       const observationsPayload: TestObservations = {
         weighingPerformance: applicableTestTypes.has(TestType.WeighingPerformance)
           ? weighingRows.map(
-              (row, index) => ({
-                sequenceIndex: index,
+            (row, index) => ({
+              sequenceIndex: index,
 
-                load:
-                  parseNum(
-                    row.load,
-                    `Weighing test load (row ${index + 1})`
-                  ),
+              load:
+                parseNum(
+                  row.load,
+                  `Weighing test load (row ${index + 1})`
+                ),
 
-                indicatedValue:
-                  parseNum(
-                    row.indicatedValue,
-                    `Weighing indicated value (row ${index + 1})`
-                  ),
+              indicatedValue:
+                parseNum(
+                  row.indicatedValue,
+                  `Weighing indicated value (row ${index + 1})`
+                ),
 
-                additionalLoad:
-                  parseNum(
-                    row.additionalLoad,
-                    `Weighing additional load (row ${index + 1})`
-                  ),
+              additionalLoad:
+                parseNum(
+                  row.additionalLoad,
+                  `Weighing additional load (row ${index + 1})`
+                ),
 
-                zeroError:
-                  parseNum(
-                    row.zeroError,
-                    `Weighing zero error (row ${index + 1})`
-                  ),
+              zeroError:
+                parseNum(
+                  row.zeroError,
+                  `Weighing zero error (row ${index + 1})`
+                ),
 
-                loadingDirection:
-                  row.loadingDirection,
-              })
-            )
+              loadingDirection:
+                row.loadingDirection,
+            })
+          )
           : [],
 
         repeatability: applicableTestTypes.has(TestType.Repeatability)
           ? {
-              testLoad:
-                parseNum(
-                  repeatability.testLoad || (repeatability.series?.[0]?.testLoad ?? '0'),
-                  'Repeatability test load'
-                ),
+            testLoad:
+              parseNum(
+                repeatability.testLoad || (repeatability.series?.[0]?.testLoad ?? '0'),
+                'Repeatability test load'
+              ),
 
-              indications:
-                repeatability.indications.map(
-                  (indication, i) =>
-                    parseNum(
-                      indication,
-                      `Repeatability indication ${i + 1}`
-                    )
-                ),
+            indications:
+              repeatability.indications.map(
+                (indication, i) =>
+                  parseNum(
+                    indication,
+                    `Repeatability indication ${i + 1}`
+                  )
+              ),
 
-              autoZeroOrTrackingActive:
-                repeatability
-                  .autoZeroOrTrackingActive,
+            autoZeroOrTrackingActive:
+              repeatability
+                .autoZeroOrTrackingActive,
 
-              ...(repeatability.series && repeatability.series.length > 0
-                ? {
-                    series: repeatability.series.map((s) => ({
-                      seriesNumber: s.seriesNumber,
-                      testLoad: parseNum(s.testLoad, `Series ${s.seriesNumber} test load`),
-                      indications: s.indications.map((val, i) =>
-                        parseNum(val, `Series ${s.seriesNumber} indication ${i + 1}`)
-                      ),
-                    })),
-                  }
-                : {}),
-            }
+            ...(repeatability.series && repeatability.series.length > 0
+              ? {
+                series: repeatability.series.map((s) => ({
+                  seriesNumber: s.seriesNumber,
+                  testLoad: parseNum(s.testLoad, `Series ${s.seriesNumber} test load`),
+                  indications: s.indications.map((val, i) =>
+                    parseNum(val, `Series ${s.seriesNumber} indication ${i + 1}`)
+                  ),
+                })),
+              }
+              : {}),
+          }
           : undefined,
 
         eccentricLoading: applicableTestTypes.has(TestType.EccentricLoading)
           ? eccentricRows.map(
-              (row, index) => ({
-                positionId:
-                  row.positionId.trim(),
+            (row, index) => ({
+              positionId:
+                row.positionId.trim(),
 
-                appliedLoad:
-                  parseNum(
-                    row.appliedLoad,
-                    `Eccentric test load (${row.positionId || `row ${index + 1}`})`
-                  ),
+              appliedLoad:
+                parseNum(
+                  row.appliedLoad,
+                  `Eccentric test load (${row.positionId || `row ${index + 1}`})`
+                ),
 
-                indicatedValue:
-                  parseNum(
-                    row.indicatedValue,
-                    `Eccentric indicated value (${row.positionId || `row ${index + 1}`})`
-                  ),
+              indicatedValue:
+                parseNum(
+                  row.indicatedValue,
+                  `Eccentric indicated value (${row.positionId || `row ${index + 1}`})`
+                ),
 
-                additionalLoad:
-                  parseNum(
-                    row.additionalLoad,
-                    `Eccentric additional load (${row.positionId || `row ${index + 1}`})`
-                  ),
+              additionalLoad:
+                parseNum(
+                  row.additionalLoad,
+                  `Eccentric additional load (${row.positionId || `row ${index + 1}`})`
+                ),
 
-                zeroError:
-                  parseNum(
-                    row.zeroError,
-                    `Eccentric zero error (${row.positionId || `row ${index + 1}`})`
-                  ),
+              zeroError:
+                parseNum(
+                  row.zeroError,
+                  `Eccentric zero error (${row.positionId || `row ${index + 1}`})`
+                ),
 
-                autoZeroOrTrackingDisabled:
-                  row
-                    .autoZeroOrTrackingDisabled,
-              })
-            )
+              autoZeroOrTrackingDisabled:
+                row
+                  .autoZeroOrTrackingDisabled,
+            })
+          )
           : [],
 
         eccentricZeroDeterminedBeforeEachLoading: applicableTestTypes.has(TestType.EccentricLoading)
@@ -1070,29 +1176,29 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
 
         discrimination: applicableTestTypes.has(TestType.Discrimination)
           ? discriminationRows.map(
-              (row, index) => ({
-                testLoad: parseNum(
-                  row.testLoad,
-                  `Discrimination test load (row ${index + 1})`
-                ),
-                indicationBefore: parseNum(
-                  row.indicationBefore,
-                  `Discrimination indication before (row ${index + 1})`
-                ),
-                indicationAfter: parseNum(
-                  row.indicationAfter,
-                  `Discrimination indication after (row ${index + 1})`
-                ),
-              })
-            )
+            (row, index) => ({
+              testLoad: parseNum(
+                row.testLoad,
+                `Discrimination test load (row ${index + 1})`
+              ),
+              indicationBefore: parseNum(
+                row.indicationBefore,
+                `Discrimination indication before (row ${index + 1})`
+              ),
+              indicationAfter: parseNum(
+                row.indicationAfter,
+                `Discrimination indication after (row ${index + 1})`
+              ),
+            })
+          )
           : [],
 
         zeroSettingAccuracy: applicableTestTypes.has(TestType.ZeroSettingAccuracy)
           ? {
-              load: parseNum(zeroSetting.load, 'Zero-setting test load'),
-              indicatedValue: parseNum(zeroSetting.indicatedValue, 'Zero-setting indicated value'),
-              additionalLoad: parseNum(zeroSetting.additionalLoad.trim() || '0', 'Zero-setting additional load'),
-            }
+            load: parseNum(zeroSetting.load, 'Zero-setting test load'),
+            indicatedValue: parseNum(zeroSetting.indicatedValue, 'Zero-setting indicated value'),
+            additionalLoad: parseNum(zeroSetting.additionalLoad.trim() || '0', 'Zero-setting additional load'),
+          }
           : undefined,
       };
 
@@ -1184,6 +1290,461 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
       setResult(null);
       setResultPersistenceMessage(null);
     }
+  }
+
+  function applyInstrumentConfigChange(
+    newInstrument: InstrumentFormState,
+    newContext: VerificationContext,
+    regenerateDemo: boolean
+  ) {
+    setInstrument(newInstrument);
+    setVerificationContext(newContext);
+    configurationEdited.current = true;
+    markDisplayedResultsStale();
+
+    if (!regenerateDemo) {
+      setDemoMessage({
+        tone: 'info',
+        text: 'Instrument configuration updated. Kept your existing measurement readings.',
+      });
+      return;
+    }
+
+    // If demo data was active, update it to maintain compatibility with new instrument parameters
+    const nextStatus = { ...demoStatus };
+    const nextModified = { ...modifiedDemo };
+    let updatedAny = false;
+
+    if (demoStatus.weighing) {
+      const res = generateWeighingPerformanceDemo(newInstrument, newContext);
+      if (res.success && res.data) {
+        setWeighingRows(res.data);
+        originalDemoSnapshot.current.weighing = JSON.stringify(res.data);
+        nextModified.weighing = false;
+        updatedAny = true;
+      } else {
+        nextStatus.weighing = false;
+        nextModified.weighing = false;
+        setWeighingRows([createWeighingRow()]);
+      }
+    }
+
+    if (demoStatus.repeatability) {
+      const res = generateRepeatabilityDemo(newInstrument, newContext);
+      if (res.success && res.data) {
+        setRepeatability(res.data);
+        originalDemoSnapshot.current.repeatability = JSON.stringify(res.data);
+        nextModified.repeatability = false;
+        updatedAny = true;
+      } else {
+        nextStatus.repeatability = false;
+        nextModified.repeatability = false;
+        setRepeatability(createDefaultRepeatability());
+      }
+    }
+
+    if (demoStatus.eccentric) {
+      const res = generateEccentricLoadingDemo(newInstrument);
+      if (res.success && res.data) {
+        setEccentricRows(res.data);
+        originalDemoSnapshot.current.eccentric = JSON.stringify(res.data);
+        nextModified.eccentric = false;
+        updatedAny = true;
+      } else {
+        nextStatus.eccentric = false;
+        nextModified.eccentric = false;
+        setEccentricRows([createEccentricRow(undefined, 'position-1')]);
+      }
+    }
+
+    if (demoStatus.discrimination) {
+      const res = generateDiscriminationDemo(newInstrument, newContext);
+      if (res.success && res.data) {
+        setDiscriminationRows(res.data);
+        originalDemoSnapshot.current.discrimination = JSON.stringify(res.data);
+        nextModified.discrimination = false;
+        updatedAny = true;
+      } else {
+        nextStatus.discrimination = false;
+        nextModified.discrimination = false;
+        setDiscriminationRows([createDiscriminationRow(undefined, '')]);
+      }
+    }
+
+    if (demoStatus.zeroSetting) {
+      const res = generateZeroSettingDemo(newInstrument);
+      if (res.success && res.data) {
+        setZeroSetting(res.data);
+        originalDemoSnapshot.current.zeroSetting = JSON.stringify(res.data);
+        nextModified.zeroSetting = false;
+        updatedAny = true;
+      } else {
+        nextStatus.zeroSetting = false;
+        nextModified.zeroSetting = false;
+        setZeroSetting(createDefaultZeroSetting());
+      }
+    }
+
+    setDemoStatus(nextStatus);
+    setModifiedDemo(nextModified);
+    if (updatedAny) {
+      setDemoMessage({
+        tone: 'info',
+        text: 'Demo data updated to match the new instrument configuration.',
+      });
+    }
+  }
+
+  function handleInstrumentConfigChange(
+    newInstrument: InstrumentFormState,
+    newContext: VerificationContext
+  ) {
+    const hasAnyActiveDemo = Object.values(demoStatus).some(Boolean);
+    const hasAnyModifiedDemo = Object.values(modifiedDemo).some(Boolean);
+
+    // If active demo data has manual modifications, ask for confirmation before overwriting
+    if (hasAnyActiveDemo && hasAnyModifiedDemo) {
+      setConfirmModal({
+        isOpen: true,
+        title: 'Update demo data for new configuration?',
+        message:
+          'You have manually modified demo measurement readings. Updating demo data to match the new instrument configuration will replace your manual edits with freshly generated values. Do you want to regenerate demo data or keep your current readings?',
+        confirmLabel: 'Regenerate Demo Data',
+        cancelLabel: 'Keep Current Readings',
+        onConfirm: () => {
+          setConfirmModal(null);
+          applyInstrumentConfigChange(newInstrument, newContext, true);
+        },
+        onCancel: () => {
+          setConfirmModal(null);
+          applyInstrumentConfigChange(newInstrument, newContext, false);
+        },
+      });
+      return;
+    }
+
+    applyInstrumentConfigChange(newInstrument, newContext, true);
+  }
+
+  function executeLoadWeighingDemo() {
+    const res = generateWeighingPerformanceDemo(instrument, verificationContext);
+    if (!res.success || !res.data) {
+      setDemoMessage({ tone: 'error', text: res.reason || 'Cannot generate weighing performance demo data.' });
+      return;
+    }
+    setWeighingRows(res.data);
+    originalDemoSnapshot.current.weighing = JSON.stringify(res.data);
+    setDemoStatus((prev) => ({ ...prev, weighing: true }));
+    setModifiedDemo((prev) => ({ ...prev, weighing: false }));
+    markDisplayedResultsStale();
+    setDemoMessage({ tone: 'success', text: `Loaded demo data for Weighing Performance (${res.data.length} observations).` });
+  }
+
+  function requestLoadWeighingDemo() {
+    if (hasWeighingReadings(weighingRows)) {
+      setConfirmModal({
+        isOpen: true,
+        title: 'Replace Weighing Performance readings?',
+        message: 'This module already contains entered measurement readings. Loading demo data will replace your current entries with sample demonstration readings. You will be able to inspect and edit all values before saving or evaluating.',
+        onConfirm: () => {
+          setConfirmModal(null);
+          executeLoadWeighingDemo();
+        },
+      });
+    } else {
+      executeLoadWeighingDemo();
+    }
+  }
+
+  function handleClearWeighingDemo() {
+    setWeighingRows([createWeighingRow()]);
+    setDemoStatus((prev) => ({ ...prev, weighing: false }));
+    setModifiedDemo((prev) => ({ ...prev, weighing: false }));
+    markDisplayedResultsStale();
+  }
+
+  function executeLoadRepeatabilityDemo() {
+    const res = generateRepeatabilityDemo(instrument, verificationContext);
+    if (!res.success || !res.data) {
+      setDemoMessage({ tone: 'error', text: res.reason || 'Cannot generate repeatability demo data.' });
+      return;
+    }
+    setRepeatability(res.data);
+    originalDemoSnapshot.current.repeatability = JSON.stringify(res.data);
+    setDemoStatus((prev) => ({ ...prev, repeatability: true }));
+    setModifiedDemo((prev) => ({ ...prev, repeatability: false }));
+    markDisplayedResultsStale();
+    setDemoMessage({ tone: 'success', text: 'Loaded demo data for Repeatability.' });
+  }
+
+  function requestLoadRepeatabilityDemo() {
+    if (hasRepeatabilityReadings(repeatability)) {
+      setConfirmModal({
+        isOpen: true,
+        title: 'Replace Repeatability readings?',
+        message: 'This module already contains entered measurement readings. Loading demo data will replace your current entries with sample demonstration readings. You will be able to inspect and edit all values before saving or evaluating.',
+        onConfirm: () => {
+          setConfirmModal(null);
+          executeLoadRepeatabilityDemo();
+        },
+      });
+    } else {
+      executeLoadRepeatabilityDemo();
+    }
+  }
+
+  function handleClearRepeatabilityDemo() {
+    setRepeatability(createDefaultRepeatability());
+    setDemoStatus((prev) => ({ ...prev, repeatability: false }));
+    setModifiedDemo((prev) => ({ ...prev, repeatability: false }));
+    markDisplayedResultsStale();
+  }
+
+  function executeLoadEccentricDemo() {
+    const res = generateEccentricLoadingDemo(instrument);
+    if (!res.success || !res.data) {
+      setDemoMessage({ tone: 'error', text: res.reason || 'Cannot generate eccentric loading demo data.' });
+      return;
+    }
+    setEccentricRows(res.data);
+    originalDemoSnapshot.current.eccentric = JSON.stringify(res.data);
+    setDemoStatus((prev) => ({ ...prev, eccentric: true }));
+    setModifiedDemo((prev) => ({ ...prev, eccentric: false }));
+    markDisplayedResultsStale();
+    setDemoMessage({ tone: 'success', text: `Loaded demo data for Eccentric Loading (${res.data.length} positions).` });
+  }
+
+  function requestLoadEccentricDemo() {
+    if (hasEccentricReadings(eccentricRows)) {
+      setConfirmModal({
+        isOpen: true,
+        title: 'Replace Eccentric Loading readings?',
+        message: 'This module already contains entered measurement readings. Loading demo data will replace your current entries with sample demonstration readings. You will be able to inspect and edit all values before saving or evaluating.',
+        onConfirm: () => {
+          setConfirmModal(null);
+          executeLoadEccentricDemo();
+        },
+      });
+    } else {
+      executeLoadEccentricDemo();
+    }
+  }
+
+  function handleClearEccentricDemo() {
+    setEccentricRows([createEccentricRow(undefined, 'position-1')]);
+    setDemoStatus((prev) => ({ ...prev, eccentric: false }));
+    setModifiedDemo((prev) => ({ ...prev, eccentric: false }));
+    markDisplayedResultsStale();
+  }
+
+  function executeLoadDiscriminationDemo() {
+    const res = generateDiscriminationDemo(instrument, verificationContext);
+    if (!res.success || !res.data) {
+      setDemoMessage({ tone: 'error', text: res.reason || 'Cannot generate discrimination demo data.' });
+      return;
+    }
+    setDiscriminationRows(res.data);
+    originalDemoSnapshot.current.discrimination = JSON.stringify(res.data);
+    setDemoStatus((prev) => ({ ...prev, discrimination: true }));
+    setModifiedDemo((prev) => ({ ...prev, discrimination: false }));
+    markDisplayedResultsStale();
+    setDemoMessage({ tone: 'success', text: `Loaded demo data for Digital Discrimination (${res.data.length} points).` });
+  }
+
+  function requestLoadDiscriminationDemo() {
+    if (hasDiscriminationReadings(discriminationRows)) {
+      setConfirmModal({
+        isOpen: true,
+        title: 'Replace Discrimination readings?',
+        message: 'This module already contains entered measurement readings. Loading demo data will replace your current entries with sample demonstration readings. You will be able to inspect and edit all values before saving or evaluating.',
+        onConfirm: () => {
+          setConfirmModal(null);
+          executeLoadDiscriminationDemo();
+        },
+      });
+    } else {
+      executeLoadDiscriminationDemo();
+    }
+  }
+
+  function handleClearDiscriminationDemo() {
+    setDiscriminationRows([createDiscriminationRow(undefined, '')]);
+    setDemoStatus((prev) => ({ ...prev, discrimination: false }));
+    setModifiedDemo((prev) => ({ ...prev, discrimination: false }));
+    markDisplayedResultsStale();
+  }
+
+  function executeLoadZeroSettingDemo() {
+    const res = generateZeroSettingDemo(instrument);
+    if (!res.success || !res.data) {
+      setDemoMessage({ tone: 'error', text: res.reason || 'Cannot generate zero-setting demo data.' });
+      return;
+    }
+    setZeroSetting(res.data);
+    originalDemoSnapshot.current.zeroSetting = JSON.stringify(res.data);
+    setDemoStatus((prev) => ({ ...prev, zeroSetting: true }));
+    setModifiedDemo((prev) => ({ ...prev, zeroSetting: false }));
+    markDisplayedResultsStale();
+    setDemoMessage({ tone: 'success', text: 'Loaded demo data for Zero-Setting Accuracy.' });
+  }
+
+  function requestLoadZeroSettingDemo() {
+    if (hasZeroSettingReadings(zeroSetting)) {
+      setConfirmModal({
+        isOpen: true,
+        title: 'Replace Zero-Setting Accuracy readings?',
+        message: 'This module already contains entered measurement readings. Loading demo data will replace your current entries with sample demonstration readings. You will be able to inspect and edit all values before saving or evaluating.',
+        onConfirm: () => {
+          setConfirmModal(null);
+          executeLoadZeroSettingDemo();
+        },
+      });
+    } else {
+      executeLoadZeroSettingDemo();
+    }
+  }
+
+  function handleClearZeroSettingDemo() {
+    setZeroSetting(createDefaultZeroSetting());
+    setDemoStatus((prev) => ({ ...prev, zeroSetting: false }));
+    setModifiedDemo((prev) => ({ ...prev, zeroSetting: false }));
+    markDisplayedResultsStale();
+  }
+
+  function executeLoadAllDemo() {
+    let loadedCount = 0;
+    const nextStatus = { ...demoStatus };
+    const nextModified = { ...modifiedDemo };
+    const msgs: string[] = [];
+
+    if (applicableTestTypes.has(TestType.WeighingPerformance)) {
+      const res = generateWeighingPerformanceDemo(instrument, verificationContext);
+      if (res.success && res.data) {
+        setWeighingRows(res.data);
+        originalDemoSnapshot.current.weighing = JSON.stringify(res.data);
+        nextStatus.weighing = true;
+        nextModified.weighing = false;
+        loadedCount++;
+      } else if (res.reason) {
+        msgs.push(`Weighing: ${res.reason}`);
+      }
+    }
+
+    if (applicableTestTypes.has(TestType.Repeatability)) {
+      const res = generateRepeatabilityDemo(instrument, verificationContext);
+      if (res.success && res.data) {
+        setRepeatability(res.data);
+        originalDemoSnapshot.current.repeatability = JSON.stringify(res.data);
+        nextStatus.repeatability = true;
+        nextModified.repeatability = false;
+        loadedCount++;
+      } else if (res.reason) {
+        msgs.push(`Repeatability: ${res.reason}`);
+      }
+    }
+
+    if (applicableTestTypes.has(TestType.EccentricLoading)) {
+      const res = generateEccentricLoadingDemo(instrument);
+      if (res.success && res.data) {
+        setEccentricRows(res.data);
+        originalDemoSnapshot.current.eccentric = JSON.stringify(res.data);
+        nextStatus.eccentric = true;
+        nextModified.eccentric = false;
+        loadedCount++;
+      } else if (res.reason) {
+        msgs.push(`Eccentric: ${res.reason}`);
+      }
+    }
+
+    if (applicableTestTypes.has(TestType.Discrimination)) {
+      const res = generateDiscriminationDemo(instrument, verificationContext);
+      if (res.success && res.data) {
+        setDiscriminationRows(res.data);
+        originalDemoSnapshot.current.discrimination = JSON.stringify(res.data);
+        nextStatus.discrimination = true;
+        nextModified.discrimination = false;
+        loadedCount++;
+      } else if (res.reason) {
+        msgs.push(`Discrimination: ${res.reason}`);
+      }
+    }
+
+    if (applicableTestTypes.has(TestType.ZeroSettingAccuracy)) {
+      const res = generateZeroSettingDemo(instrument);
+      if (res.success && res.data) {
+        setZeroSetting(res.data);
+        originalDemoSnapshot.current.zeroSetting = JSON.stringify(res.data);
+        nextStatus.zeroSetting = true;
+        nextModified.zeroSetting = false;
+        loadedCount++;
+      } else if (res.reason) {
+        msgs.push(`Zero-Setting: ${res.reason}`);
+      }
+    }
+
+    setDemoStatus(nextStatus);
+    setModifiedDemo(nextModified);
+    markDisplayedResultsStale();
+
+    if (loadedCount > 0) {
+      const warning = msgs.length > 0 ? ` (${msgs.join('; ')})` : '';
+      setDemoMessage({
+        tone: 'success',
+        text: `Loaded demo data for ${loadedCount} applicable test module(s).${warning}`,
+      });
+    } else {
+      setDemoMessage({
+        tone: 'error',
+        text: msgs.length > 0 ? msgs.join('; ') : 'No applicable tests available for demo data.',
+      });
+    }
+  }
+
+  function requestLoadAllDemo() {
+    const hasAnyData =
+      (applicableTestTypes.has(TestType.WeighingPerformance) && hasWeighingReadings(weighingRows)) ||
+      (applicableTestTypes.has(TestType.Repeatability) && hasRepeatabilityReadings(repeatability)) ||
+      (applicableTestTypes.has(TestType.EccentricLoading) && hasEccentricReadings(eccentricRows)) ||
+      (applicableTestTypes.has(TestType.Discrimination) && hasDiscriminationReadings(discriminationRows)) ||
+      (applicableTestTypes.has(TestType.ZeroSettingAccuracy) && hasZeroSettingReadings(zeroSetting));
+
+    if (hasAnyData) {
+      setConfirmModal({
+        isOpen: true,
+        title: 'Replace existing test readings with demo data?',
+        message: 'One or more test modules already contain entered measurement readings. Loading demo data will replace them with sample demonstration readings for all applicable tests. You can inspect and edit all values before saving or evaluating.',
+        onConfirm: () => {
+          setConfirmModal(null);
+          executeLoadAllDemo();
+        },
+      });
+    } else {
+      executeLoadAllDemo();
+    }
+  }
+
+  function handleClearAllDemo() {
+    setWeighingRows([createWeighingRow()]);
+    setRepeatability(createDefaultRepeatability());
+    setEccentricRows([createEccentricRow(undefined, 'position-1')]);
+    setDiscriminationRows([createDiscriminationRow(undefined, '')]);
+    setZeroSetting(createDefaultZeroSetting());
+    setDemoStatus({
+      weighing: false,
+      repeatability: false,
+      eccentric: false,
+      discrimination: false,
+      zeroSetting: false,
+    });
+    setModifiedDemo({
+      weighing: false,
+      repeatability: false,
+      eccentric: false,
+      discrimination: false,
+      zeroSetting: false,
+    });
+    markDisplayedResultsStale();
+    setDemoMessage({ tone: 'info', text: 'All demo sample readings cleared.' });
   }
 
   const testingReadOnly = Boolean(
@@ -1279,22 +1840,73 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
 
   return (
     <div className="grid gap-3">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[5px] border border-[#D9E2EC] bg-white px-3 py-2 text-[0.66rem] text-[#667085] shadow-[0_1px_2px_rgba(16,24,40,0.03)]">
-        <span className="font-bold uppercase tracking-[0.08em] text-[#344054]">Test Session</span>
-        <span className="font-mono">{session?.id}</span>
-        <span className="h-3 w-px bg-[#D9E2EC]" aria-hidden="true" />
-        <span className="font-semibold text-[#0A66C2]">
-          {session?.status.replaceAll('_', ' ')}
-        </span>
-        <span className="h-3 w-px bg-[#D9E2EC]" aria-hidden="true" />
-        <span className="font-bold uppercase tracking-[0.08em] text-[#344054]">Active Context</span>
-        <span
-          data-testid="session-verification-context"
-          className="rounded bg-[#EFF8FF] px-2 py-0.5 font-bold uppercase tracking-[0.05em] text-[#175CD3]"
-        >
-          {getVerificationContextLabel(verificationContext)}
-        </span>
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-[5px] border border-[#D9E2EC] bg-white px-3 py-2 text-[0.66rem] text-[#667085] shadow-[0_1px_2px_rgba(16,24,40,0.03)]">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="font-bold uppercase tracking-[0.08em] text-[#344054]">Test Session</span>
+          <span className="font-mono">{session?.id}</span>
+          <span className="h-3 w-px bg-[#D9E2EC]" aria-hidden="true" />
+          <span className="font-semibold text-[#0A66C2]">
+            {session?.status.replaceAll('_', ' ')}
+          </span>
+          <span className="h-3 w-px bg-[#D9E2EC]" aria-hidden="true" />
+          <span className="font-bold uppercase tracking-[0.08em] text-[#344054]">Active Context</span>
+          <span
+            data-testid="session-verification-context"
+            className="rounded bg-[#EFF8FF] px-2 py-0.5 font-bold uppercase tracking-[0.05em] text-[#175CD3]"
+          >
+            {getVerificationContextLabel(verificationContext)}
+          </span>
+          {Object.values(demoStatus).some(Boolean) && (
+            <>
+              <span className="h-3 w-px bg-[#D9E2EC]" aria-hidden="true" />
+              <span className="rounded bg-[#FEF3C7] px-2 py-0.5 font-bold uppercase tracking-[0.05em] text-[#92400E]">
+                DEMO DATA ACTIVE
+              </span>
+            </>
+          )}
+        </div>
+        {!testingReadOnly && (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={requestLoadAllDemo}
+              disabled={savingObservations || loading}
+              className="rounded-[5px] border border-[#F59E0B] bg-[#FFFBEB] px-3 py-1 text-[0.7rem] font-bold text-[#92400E] shadow-2xs transition-colors hover:bg-[#FEF3C7] disabled:opacity-50"
+            >
+              Load Demo Data (All Tests)
+            </button>
+            {Object.values(demoStatus).some(Boolean) && (
+              <button
+                type="button"
+                onClick={handleClearAllDemo}
+                className="text-[0.68rem] font-semibold text-[#667085] hover:text-[#B42318]"
+              >
+                Clear Demo Data
+              </button>
+            )}
+          </div>
+        )}
       </div>
+      {demoMessage && (
+        <div
+          role="status"
+          className={`flex items-center justify-between rounded-[5px] border px-3 py-2 text-[0.72rem] ${demoMessage.tone === 'error'
+            ? 'border-[#F3C7C7] bg-[#FEF3F2] text-[#B42318]'
+            : demoMessage.tone === 'info'
+              ? 'border-[#B9D5EF] bg-[#F6FAFE] text-[#004182]'
+              : 'border-[#ABEFC6] bg-[#ECFDF3] text-[#067647]'
+            }`}
+        >
+          <span>{demoMessage.text}</span>
+          <button
+            type="button"
+            onClick={() => setDemoMessage(null)}
+            className="ml-2 text-[0.68rem] font-bold opacity-70 hover:opacity-100"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       {session && <ReportActions sessionId={session.id} status={session.status} />}
       {testingReadOnly && (
         <p role="status" className="m-0 rounded-[5px] border border-[#B9D5EF] bg-[#F6FAFE] px-3 py-2 text-[0.72rem] text-[#004182]">
@@ -1310,27 +1922,15 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
         </div>
       )}
       <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1.18fr)_minmax(430px,0.82fr)]">
-      {/* Input workflow */}
-      <div className="flex flex-col gap-4">
-        <fieldset disabled={savingObservations || loading || testingReadOnly} className="contents">
-        <InstrumentSection
-          value={instrument}
-          onChange={(value) => {
-            setInstrument(value);
-            configurationEdited.current = true;
-            markDisplayedResultsStale();
-          }}
-          verificationContext={
-            verificationContext
-          }
-          onVerificationContextChange={
-            (value) => {
-              setVerificationContext(value);
-              configurationEdited.current = true;
-              markDisplayedResultsStale();
-            }
-          }
-        />
+        {/* Input workflow */}
+        <div className="flex flex-col gap-4">
+          <fieldset disabled={savingObservations || loading || testingReadOnly} className="contents">
+            <InstrumentSection
+              value={instrument}
+              onChange={(value) => handleInstrumentConfigChange(value, verificationContext)}
+              verificationContext={verificationContext}
+              onVerificationContextChange={(value) => handleInstrumentConfigChange(instrument, value)}
+            />
 
         {/* Weighing Performance — shown only when selection engine marks it applicable */}
         {testSelection.length === 0 || applicableTestTypes.has(TestType.WeighingPerformance) ? (
@@ -1339,12 +1939,23 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
             onChange={(rows) => {
               setWeighingRows(rows);
               markDisplayedResultsStale();
+              if (!hasWeighingReadings(rows)) {
+                setDemoStatus((prev) => ({ ...prev, weighing: false }));
+                setModifiedDemo((prev) => ({ ...prev, weighing: false }));
+              } else if (demoStatus.weighing && originalDemoSnapshot.current.weighing) {
+                const isDiff = JSON.stringify(rows) !== originalDemoSnapshot.current.weighing;
+                setModifiedDemo((prev) => ({ ...prev, weighing: isDiff }));
+              }
             }}
             nextId={() => generateRowId('w')}
             verificationContext={verificationContext}
             instrumentMin={Number(instrument.min) || undefined}
             instrumentMax={Number(instrument.max) || undefined}
             instrumentE={Number(instrument.e) || undefined}
+            onLoadDemoData={testingReadOnly ? undefined : requestLoadWeighingDemo}
+            isDemoData={demoStatus.weighing}
+            isDemoModified={modifiedDemo.weighing}
+            onClearDemoData={testingReadOnly ? undefined : handleClearWeighingDemo}
           />
         ) : (
           <NotApplicableBanner
@@ -1361,6 +1972,13 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
             onChange={(value) => {
               setRepeatability(value);
               markDisplayedResultsStale();
+              if (!hasRepeatabilityReadings(value)) {
+                setDemoStatus((prev) => ({ ...prev, repeatability: false }));
+                setModifiedDemo((prev) => ({ ...prev, repeatability: false }));
+              } else if (demoStatus.repeatability && originalDemoSnapshot.current.repeatability) {
+                const isDiff = JSON.stringify(value) !== originalDemoSnapshot.current.repeatability;
+                setModifiedDemo((prev) => ({ ...prev, repeatability: isDiff }));
+              }
             }}
             accuracyClass={
               instrument.accuracyClass
@@ -1371,6 +1989,10 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
             }
             verificationContext={verificationContext}
             instrumentMax={Number(instrument.max) || undefined}
+            onLoadDemoData={testingReadOnly ? undefined : requestLoadRepeatabilityDemo}
+            isDemoData={demoStatus.repeatability}
+            isDemoModified={modifiedDemo.repeatability}
+            onClearDemoData={testingReadOnly ? undefined : handleClearRepeatabilityDemo}
           />
         ) : (
           <NotApplicableBanner
@@ -1387,6 +2009,13 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
             onChange={(rows) => {
               setEccentricRows(rows);
               markDisplayedResultsStale();
+              if (!hasEccentricReadings(rows)) {
+                setDemoStatus((prev) => ({ ...prev, eccentric: false }));
+                setModifiedDemo((prev) => ({ ...prev, eccentric: false }));
+              } else if (demoStatus.eccentric && originalDemoSnapshot.current.eccentric) {
+                const isDiff = JSON.stringify(rows) !== originalDemoSnapshot.current.eccentric;
+                setModifiedDemo((prev) => ({ ...prev, eccentric: isDiff }));
+              }
             }}
             zeroDeterminedBeforeEachLoading={
               eccentricZeroDetermined
@@ -1407,6 +2036,10 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
             instrumentMax={Number(instrument.max) || undefined}
             instrumentE={Number(instrument.e) || undefined}
             nextId={() => generateRowId('e')}
+            onLoadDemoData={testingReadOnly ? undefined : requestLoadEccentricDemo}
+            isDemoData={demoStatus.eccentric}
+            isDemoModified={modifiedDemo.eccentric}
+            onClearDemoData={testingReadOnly ? undefined : handleClearEccentricDemo}
           />
         ) : (
           <NotApplicableBanner
@@ -1423,8 +2056,19 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
             onChange={(rows) => {
               setDiscriminationRows(rows);
               markDisplayedResultsStale();
+              if (!hasDiscriminationReadings(rows)) {
+                setDemoStatus((prev) => ({ ...prev, discrimination: false }));
+                setModifiedDemo((prev) => ({ ...prev, discrimination: false }));
+              } else if (demoStatus.discrimination && originalDemoSnapshot.current.discrimination) {
+                const isDiff = JSON.stringify(rows) !== originalDemoSnapshot.current.discrimination;
+                setModifiedDemo((prev) => ({ ...prev, discrimination: isDiff }));
+              }
             }}
             nextId={() => generateRowId('d')}
+            onLoadDemoData={testingReadOnly ? undefined : requestLoadDiscriminationDemo}
+            isDemoData={demoStatus.discrimination}
+            isDemoModified={modifiedDemo.discrimination}
+            onClearDemoData={testingReadOnly ? undefined : handleClearDiscriminationDemo}
           />
         ) : (
           <NotApplicableBanner
@@ -1441,7 +2085,18 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
             onChange={(val) => {
               setZeroSetting(val);
               markDisplayedResultsStale();
+              if (!hasZeroSettingReadings(val)) {
+                setDemoStatus((prev) => ({ ...prev, zeroSetting: false }));
+                setModifiedDemo((prev) => ({ ...prev, zeroSetting: false }));
+              } else if (demoStatus.zeroSetting && originalDemoSnapshot.current.zeroSetting) {
+                const isDiff = JSON.stringify(val) !== originalDemoSnapshot.current.zeroSetting;
+                setModifiedDemo((prev) => ({ ...prev, zeroSetting: isDiff }));
+              }
             }}
+            onLoadDemoData={testingReadOnly ? undefined : requestLoadZeroSettingDemo}
+            isDemoData={demoStatus.zeroSetting}
+            isDemoModified={modifiedDemo.zeroSetting}
+            onClearDemoData={testingReadOnly ? undefined : handleClearZeroSettingDemo}
           />
         ) : (
           <NotApplicableBanner
@@ -1451,91 +2106,103 @@ export function EvaluationScreen({ instrumentId, sessionId }: EvaluationScreenPr
           />
         )}
 
-        </fieldset>
-        {saveMessage && (
-          <p
-            role={saveMessage.tone === 'error' ? 'alert' : 'status'}
-            className={`m-0 rounded-[5px] border px-3 py-2 text-[0.72rem] ${
-              saveMessage.tone === 'error'
+          </fieldset>
+          {saveMessage && (
+            <p
+              role={saveMessage.tone === 'error' ? 'alert' : 'status'}
+              className={`m-0 rounded-[5px] border px-3 py-2 text-[0.72rem] ${saveMessage.tone === 'error'
                 ? 'border-[#F3C7C7] bg-[#FEF3F2] text-[#B42318]'
                 : 'border-[#ABEFC6] bg-[#ECFDF3] text-[#067647]'
-            }`}
-          >
-            {saveMessage.text}
-          </p>
-        )}
-        {(resultIntegrityError || resultPersistenceMessage) && (
-          <p
-            role={resultIntegrityError || resultPersistenceMessage?.tone === 'error' ? 'alert' : 'status'}
-            className={`m-0 rounded-[5px] border px-3 py-2 text-[0.72rem] ${
-              resultIntegrityError || resultPersistenceMessage?.tone === 'error'
-                ? 'border-[#F3C7C7] bg-[#FEF3F2] text-[#B42318]'
-                : 'border-[#ABEFC6] bg-[#ECFDF3] text-[#067647]'
-            }`}
-          >
-            {resultIntegrityError ?? resultPersistenceMessage?.text}
-          </p>
-        )}
-        {workflowMessage && (
-          <p role={workflowMessage.tone === 'error' ? 'alert' : 'status'} className={`m-0 rounded-[5px] border px-3 py-2 text-[0.72rem] ${workflowMessage.tone === 'error' ? 'border-[#F3C7C7] bg-[#FEF3F2] text-[#B42318]' : 'border-[#ABEFC6] bg-[#ECFDF3] text-[#067647]'}`}>
-            {workflowMessage.text}
-          </p>
-        )}
-        <div className="flex flex-wrap justify-end gap-2 border-t border-[#D9E2EC] pt-1 sm:border-0 sm:pt-0">
-          {testingReadOnly ? null : (
-            <>
-          <button
-            type="button"
-            onClick={() => void saveProgress()}
-            disabled={savingObservations || loading || persistingResults}
-            className="min-w-[170px] rounded-[5px] border border-[#A9C9E8] bg-[#F6FAFE] px-5 py-3 text-[0.8rem] font-bold text-[#0A66C2] transition-colors hover:border-[#0A66C2] hover:bg-[#EAF3FC] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {savingObservations ? 'Saving…' : 'Save Progress'}
-          </button>
-          <button
-            type="button"
-            onClick={
-              evaluateCompliance
-            }
-            disabled={loading || savingObservations || persistingResults || Boolean(resultIntegrityError)}
-            className="min-w-[230px] rounded-[5px] bg-[#0A66C2] px-6 py-3 text-[0.82rem] font-bold text-white shadow-[0_1px_2px_rgba(16,24,40,0.12)] transition-colors hover:bg-[#004182] disabled:cursor-not-allowed disabled:bg-[#98A2B3]"
-          >
-            {persistingResults
-              ? 'Persisting results…'
-              : loading
-              ? 'Evaluating…'
-              : 'Evaluate Compliance'}
-          </button>
-            </>
-          )}
-          {canSubmitForReview && (
-            <button
-              type="button"
-              onClick={() => void submitForReview()}
-              disabled={submittingReview}
-              className="min-w-[190px] rounded-[5px] bg-[#067647] px-5 py-3 text-[0.8rem] font-bold text-white disabled:bg-[#98A2B3]"
+                }`}
             >
-              {submittingReview
-                ? 'Submitting…'
-                : session?.status === 'RETURNED'
-                ? 'Resubmit for Review'
-                : 'Submit for Review'}
-            </button>
+              {saveMessage.text}
+            </p>
           )}
+          {(resultIntegrityError || resultPersistenceMessage) && (
+            <p
+              role={resultIntegrityError || resultPersistenceMessage?.tone === 'error' ? 'alert' : 'status'}
+              className={`m-0 rounded-[5px] border px-3 py-2 text-[0.72rem] ${resultIntegrityError || resultPersistenceMessage?.tone === 'error'
+                ? 'border-[#F3C7C7] bg-[#FEF3F2] text-[#B42318]'
+                : 'border-[#ABEFC6] bg-[#ECFDF3] text-[#067647]'
+                }`}
+            >
+              {resultIntegrityError ?? resultPersistenceMessage?.text}
+            </p>
+          )}
+          {workflowMessage && (
+            <p role={workflowMessage.tone === 'error' ? 'alert' : 'status'} className={`m-0 rounded-[5px] border px-3 py-2 text-[0.72rem] ${workflowMessage.tone === 'error' ? 'border-[#F3C7C7] bg-[#FEF3F2] text-[#B42318]' : 'border-[#ABEFC6] bg-[#ECFDF3] text-[#067647]'}`}>
+              {workflowMessage.text}
+            </p>
+          )}
+          <div className="flex flex-wrap justify-end gap-2 border-t border-[#D9E2EC] pt-1 sm:border-0 sm:pt-0">
+            {testingReadOnly ? null : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void saveProgress()}
+                  disabled={savingObservations || loading || persistingResults}
+                  className="min-w-[170px] rounded-[5px] border border-[#A9C9E8] bg-[#F6FAFE] px-5 py-3 text-[0.8rem] font-bold text-[#0A66C2] transition-colors hover:border-[#0A66C2] hover:bg-[#EAF3FC] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {savingObservations ? 'Saving…' : 'Save Progress'}
+                </button>
+                <button
+                  type="button"
+                  onClick={
+                    evaluateCompliance
+                  }
+                  disabled={loading || savingObservations || persistingResults || Boolean(resultIntegrityError)}
+                  className="min-w-[230px] rounded-[5px] bg-[#0A66C2] px-6 py-3 text-[0.82rem] font-bold text-white shadow-[0_1px_2px_rgba(16,24,40,0.12)] transition-colors hover:bg-[#004182] disabled:cursor-not-allowed disabled:bg-[#98A2B3]"
+                >
+                  {persistingResults
+                    ? 'Persisting results…'
+                    : loading
+                      ? 'Evaluating…'
+                      : 'Evaluate Compliance'}
+                </button>
+              </>
+            )}
+            {canSubmitForReview && (
+              <button
+                type="button"
+                onClick={() => void submitForReview()}
+                disabled={submittingReview}
+                className="min-w-[190px] rounded-[5px] bg-[#067647] px-5 py-3 text-[0.8rem] font-bold text-white disabled:bg-[#98A2B3]"
+              >
+                {submittingReview
+                  ? 'Submitting…'
+                  : session?.status === 'RETURNED'
+                    ? 'Resubmit for Review'
+                    : 'Submit for Review'}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Results */}
+        <div className="xl:sticky xl:top-5">
+          <ResultsSection
+            result={result}
+            savedResults={savedResults}
+            savedResultsStale={resultsStale}
+            error={error}
+            loading={loading}
+          />
         </div>
       </div>
-
-      {/* Results */}
-      <div className="xl:sticky xl:top-5">
-        <ResultsSection
-          result={result}
-          savedResults={savedResults}
-          savedResultsStale={resultsStale}
-          error={error}
-          loading={loading}
+      {confirmModal && (
+        <ConfirmDemoModal
+          isOpen={confirmModal.isOpen}
+          title={confirmModal.title}
+          message={confirmModal.message}
+          confirmLabel={confirmModal.confirmLabel}
+          cancelLabel={confirmModal.cancelLabel}
+          onConfirm={confirmModal.onConfirm}
+          onCancel={() => {
+            if (confirmModal.onCancel) confirmModal.onCancel();
+            setConfirmModal(null);
+          }}
         />
-      </div>
-      </div>
+      )}
     </div>
   );
 }

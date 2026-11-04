@@ -8,8 +8,10 @@ import {
   Field,
   TextInput,
   Checkbox,
+  GhostButton,
 } from '@/components/ui/FormField';
 import { ComplianceIcon } from '@/components/ui/ComplianceIcon';
+import { DemoDataBanner } from './DemoDataBanner';
 
 import {
   requiredRepeatabilityWeighingsCount,
@@ -26,6 +28,10 @@ interface RepeatabilitySectionProps {
   instrumentHasAutoZero: boolean;
   verificationContext?: string | VerificationContext;
   instrumentMax?: number;
+  onLoadDemoData?: () => void;
+  isDemoData?: boolean;
+  isDemoModified?: boolean;
+  onClearDemoData?: () => void;
 }
 
 export function RepeatabilitySection({
@@ -35,6 +41,10 @@ export function RepeatabilitySection({
   instrumentHasAutoZero,
   verificationContext,
   instrumentMax,
+  onLoadDemoData,
+  isDemoData,
+  isDemoModified,
+  onClearDemoData,
 }: RepeatabilitySectionProps) {
   const isTypeEval = isTypeEvaluationContext(verificationContext);
   const required = requiredRepeatabilityWeighingsCount(
@@ -137,7 +147,15 @@ export function RepeatabilitySection({
           ? `OIML R 76-1 Annex A.4.10: 2 series required (~0.5 Max and close to Max), ${required} weighings each.`
           : `OIML R 76-1 Annex A.4.10: 1 series required (~0.8 Max), ${required} weighings for Accuracy Class ${accuracyClass}.`
       }
+      action={
+        onLoadDemoData ? (
+          <GhostButton onClick={onLoadDemoData}>
+            Load Demo Data
+          </GhostButton>
+        ) : undefined
+      }
     >
+      {isDemoData && <DemoDataBanner onClear={onClearDemoData} isModified={isDemoModified} />}
       <div className="mb-4 rounded-md border border-[#D9E2EC] bg-[#F9FBFC] p-3.5">
         <Checkbox
           label="Auto-zero / zero-tracking active during test"

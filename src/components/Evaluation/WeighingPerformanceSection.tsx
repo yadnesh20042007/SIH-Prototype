@@ -18,6 +18,7 @@ import {
   type WeighingRowState,
 } from './types';
 import type { VerificationContext } from '@/lib/r76/types';
+import { DemoDataBanner } from './DemoDataBanner';
 
 const DIRECTION_OPTIONS = [
   {
@@ -38,6 +39,10 @@ interface WeighingPerformanceSectionProps {
   instrumentMin?: number;
   instrumentMax?: number;
   instrumentE?: number;
+  onLoadDemoData?: () => void;
+  isDemoData?: boolean;
+  isDemoModified?: boolean;
+  onClearDemoData?: () => void;
 }
 
 export function WeighingPerformanceSection({
@@ -48,6 +53,10 @@ export function WeighingPerformanceSection({
   instrumentMin,
   instrumentMax,
   instrumentE,
+  onLoadDemoData,
+  isDemoData,
+  isDemoModified,
+  onClearDemoData,
 }: WeighingPerformanceSectionProps) {
   const isTypeEval = isTypeEvaluationContext(verificationContext);
   const requiredMinLoads = isTypeEval ? 10 : 5;
@@ -169,11 +178,19 @@ export function WeighingPerformanceSection({
       icon={<ComplianceIcon name="weighing" />}
       subtitle="Record each applied load and corresponding instrument indication."
       action={
-        <GhostButton onClick={addRow}>
-          + Add observation
-        </GhostButton>
+        <div className="flex flex-wrap items-center gap-2">
+          {onLoadDemoData && (
+            <GhostButton onClick={onLoadDemoData}>
+              Load Demo Data
+            </GhostButton>
+          )}
+          <GhostButton onClick={addRow}>
+            + Add observation
+          </GhostButton>
+        </div>
       }
     >
+      {isDemoData && <DemoDataBanner onClear={onClearDemoData} isModified={isDemoModified} />}
       <div className="mb-4 rounded-md border border-[#D9E2EC] bg-[#F9FBFC] p-3 text-[0.76rem] text-[#344054]">
         <div className="flex flex-wrap items-center justify-between gap-2 font-semibold">
           <span>
